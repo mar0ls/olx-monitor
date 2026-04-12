@@ -459,6 +459,22 @@ class TestExtractExtraCosts:
         total, items = scraper.extract_extra_costs(desc)
         assert total == 1070
 
+    def test_czynsz_decimal_comma(self):
+        desc = "+ czynsz 600,00 zł"
+        total, items = scraper.extract_extra_costs(desc)
+        assert total == 600
+
+    def test_rachunki_za_media_bez_zl(self):
+        desc = "+ ok 250 rachunki za media"
+        total, items = scraper.extract_extra_costs(desc)
+        assert total == 250
+
+    def test_czynsz_decimal_plus_rachunki_bez_zl(self):
+        # format z ogłoszenia: "+ czynsz 600,00 zł\n+ ok 250 rachunki za media"
+        desc = "+ czynsz 600,00 zł\n+ ok 250 rachunki za media."
+        total, items = scraper.extract_extra_costs(desc)
+        assert total == 850
+
 
 # ─────────────────────────────────────────────────────────────
 #  has_next_page

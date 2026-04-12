@@ -642,8 +642,9 @@ KOSZT_PATTERNS = [
     # obsługiwane przez wzorzec wyżej — łącznie wyciąga kwotę opłat
     # "rachunki około 200-300 zł" → bierz wyższą
     r"rachunk[i]?[\s:\-–~\w\.]+(\d[\d\s]{1,4})\s*(?:-|–|do)\s*(\d[\d\s]{1,4})\s*z[łl]",
-    # "rachunki 250 zł"
+    # "rachunki 250 zł" / "+ ok 250 rachunki za media"
     r"rachunk[i]?[\s:\-–~\w\.]+(\d[\d\s]{1,4})\s*z[łl]",
+    r"\+\s*(?:ok\.?\s+)?(\d[\d\s]{1,3})\s+rachunki?\s+za\s+media",
     # "koszty eksploatacji 450 zł"
     r"koszty\s+eksploatacji[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
     # "do tego/dodatkowo 300 zł"
@@ -682,6 +683,9 @@ def extract_extra_costs(
     """
     if not description:
         return 0, ["(brak opisu – koszty nieznane)"]
+
+    # Normalizuj kwoty z przecinkiem dziesiętnym: "600,00 zł" → "600 zł"
+    description = re.sub(r"(\d),\d{2}\s*z", r"\1 z", description)
 
     for pattern in WLICZONE_PATTERNS:
         if re.search(pattern, description, re.I):

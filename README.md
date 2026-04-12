@@ -1,6 +1,6 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Tests](https://img.shields.io/badge/tests-138%20passed-brightgreen)
+[![Tests](https://github.com/mar0ls/olx-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/mar0ls/olx-monitor/actions/workflows/tests.yml)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 [![Release](https://img.shields.io/github/v/release/mar0ls/olx-monitor)](https://github.com/mar0ls/olx-monitor/releases/latest)
 
