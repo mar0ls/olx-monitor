@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Zainstaluj zależności
+        run: pip install requests beautifulsoup4 pytest pytest-cov ruff
+
+      - name: Ruff (lint)
+        run: ruff check olx_scraper.py olx_gui.py otodom_scraper.py update_districts.py miner_id.py
+
+      - name: Uruchom testy z pokryciem
+        run: pytest test_olx_scraper.py -v --tb=short --cov=olx_scraper --cov=otodom_scraper --cov-report=term-missing --cov-fail-under=80

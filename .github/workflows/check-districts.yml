@@ -1,0 +1,68 @@
+name: Sprawdź district_id
+
+on:
+  schedule:
+    - cron: '0 4 * * 0'  # co niedzielę o 4:00 UTC
+  workflow_dispatch:        # możliwość ręcznego uruchomienia
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install requests beautifulsoup4
+
+      - name: Pobierz district_id z OLX i porównaj
+        id: update
+        run: |
+          python update_districts.py
+          EXIT=$?
+          if   [ $EXIT -eq 0 ]; then echo "CHANGED=false" >> $GITHUB_ENV
+          elif [ $EXIT -eq 1 ]; then echo "CHANGED=true"  >> $GITHUB_ENV
+          else
+            echo "Skrypt zakończył się błędem (kod $EXIT) — OLX prawdopodobnie zablokował runner."
+            exit 1
+          fi
+
+      - name: Commit, bump tag, usuń stary release
+        if: env.CHANGED == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add olx_scraper.py
+          git commit -m "auto: aktualizacja district_id dzielnic OLX"
+
+          # Oblicz nowy tag (bump patch np. v1.2.3 → v1.2.4)
+          LAST=$(git tag --sort=-version:refname | head -1)
+          if [ -z "$LAST" ]; then
+            NEW="v1.0.1"
+          else
+            NEW=$(python -c "
+          v = '$LAST'.lstrip('v').split('.')
+          v[2] = str(int(v[2]) + 1)
+          print('v' + '.'.join(v))
+          ")
+          fi
+
+          echo "Stary tag: $LAST  →  Nowy tag: $NEW"
+
+          # Usuń poprzedni GitHub Release (bez usuwania tagu git)
+          gh release delete "$LAST" --yes 2>/dev/null || true
+
+          git push
+          git tag "$NEW"
+          git push origin "$NEW"
+          # Nowy tag wyzwoli release.yml który zbuduje binarke
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
