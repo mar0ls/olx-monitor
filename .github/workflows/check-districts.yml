@@ -43,8 +43,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/mar0ls/olx-monitor.git
-          git add olx_scraper.py
-          git commit -m "auto: aktualizacja district_id dzielnic OLX"
+          git add olx_scraper.py README.md
+          git commit -m "auto: aktualizacja district_id i README"
 
           # Oblicz nowy tag (bump patch np. v1.2.3 → v1.2.4)
           LAST=$(git tag --sort=-version:refname | head -1)

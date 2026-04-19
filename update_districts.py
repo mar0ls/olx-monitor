@@ -11,6 +11,7 @@ Używany przez GitHub Action check-districts.yml.
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -18,6 +19,22 @@ import olx_scraper
 from miner_id import DEFAULT_CITIES, fetch_districts
 
 SCRAPER_FILE = Path(__file__).parent / "olx_scraper.py"
+README_FILE  = Path(__file__).parent / "README.md"
+
+CITY_DISPLAY_NAMES = {
+    "warszawa":    "Warszawa",
+    "krakow":      "Kraków",
+    "wroclaw":     "Wrocław",
+    "poznan":      "Poznań",
+    "gdansk":      "Gdańsk",
+    "gdynia":      "Gdynia",
+    "sopot":       "Sopot",
+    "lodz":        "Łódź",
+    "katowice":    "Katowice",
+    "szczecin":    "Szczecin",
+    "bialystok":   "Białystok",
+    "czestochowa": "Częstochowa",
+}
 
 # Miasta bez dzielnic na OLX — nie próbujemy ich scrapować
 CITIES_WITHOUT_DISTRICTS = {
@@ -105,7 +122,42 @@ def main() -> int:
 
     SCRAPER_FILE.write_text(patched, encoding="utf-8")
     print("Zaktualizowano olx_scraper.py.")
+
+    _update_readme(new_districts)
     return 1
+
+
+def _update_readme(districts: dict[str, dict[str, int]]) -> None:
+    if not README_FILE.exists():
+        return
+
+    readme = README_FILE.read_text(encoding="utf-8")
+    month_pl = [
+        "", "styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec",
+        "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień",
+    ]
+    now = datetime.now()
+    date_str = f"{month_pl[now.month]} {now.year}"
+
+    # Zaktualizuj datę w nagłówku sekcji
+    readme = re.sub(
+        r"(Scraper zawiera wbudowaną mapę `district_id` dla \d+ polskich miast \()([^)]+)(\)\.)",
+        lambda m: f"{m.group(1)}{date_str}{m.group(3)}",
+        readme,
+    )
+
+    # Zaktualizuj liczby dzielnic w tabelce
+    for city, name in CITY_DISPLAY_NAMES.items():
+        count = len(districts.get(city, {}))
+        if count:
+            readme = re.sub(
+                rf"(\| {re.escape(name)} \| `{re.escape(city)}` \| )\d+( \|)",
+                rf"\g<1>{count}\2",
+                readme,
+            )
+
+    README_FILE.write_text(readme, encoding="utf-8")
+    print("Zaktualizowano README.md (liczby dzielnic i data).")
 
 
 if __name__ == "__main__":
