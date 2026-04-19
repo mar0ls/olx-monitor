@@ -1,8 +1,8 @@
 name: Sprawdź district_id
 
 on:
-  schedule:
-    - cron: '0 4 * * 0'  # co niedzielę o 4:00 UTC
+  #schedule:
+    # - cron: '0 4 * * 0'  # co niedzielę o 4:00 UTC
   workflow_dispatch:        # możliwość ręcznego uruchomienia
 
 jobs:
