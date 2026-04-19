@@ -26,8 +26,10 @@ jobs:
       - name: Pobierz district_id z OLX i porównaj
         id: update
         run: |
+          set +e
           python update_districts.py
           EXIT=$?
+          set -e
           if   [ $EXIT -eq 0 ]; then echo "CHANGED=false" >> $GITHUB_ENV
           elif [ $EXIT -eq 1 ]; then echo "CHANGED=true"  >> $GITHUB_ENV
           else
