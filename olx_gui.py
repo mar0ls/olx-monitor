@@ -165,10 +165,18 @@ class ScrapeWorker(QThread):
                             extra_koszt, extra_pozycje = engine.extract_extra_costs(opis, structured_extra)
                     else:
                         use_llm = config.get("llm_enabled")
-                        method = "LLM" if use_llm else "regex"
+                        provider = config.get("llm_provider", "ollama")
+                        method = f"LLM/{provider}" if use_llm else "regex"
                         self.log_msg.emit(f"  Sprawdzam opis [{method}]: {short}...")
                         opis, structured_extra = engine.fetch_detail(listing["url"])
-                        if use_llm:
+                        if use_llm and provider == "openai":
+                            extra_koszt, extra_pozycje = engine.extract_extra_costs_openai(
+                                opis, structured_extra,
+                                api_key=config.get("openai_key", ""),
+                                openai_model=config.get("openai_model", "gpt-4o-mini"),
+                                timeout=config.get("openai_timeout", 30),
+                            )
+                        elif use_llm:
                             extra_koszt, extra_pozycje = engine.extract_extra_costs_llm(
                                 opis, structured_extra,
                                 llm_url=config.get("llm_url", "http://localhost:11434"),
@@ -655,10 +663,10 @@ class NotifyPanel(QWidget):
 
 
 
-# Panel LLM (Ollama)
+# Panel LLM (Ollama / OpenAI)
 
 class LlmPanel(QWidget):
-    """Panel konfiguracji analizy kosztów przez lokalny LLM (Ollama)."""
+    """Panel konfiguracji analizy kosztów przez LLM (Ollama lub OpenAI API)."""
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build()
@@ -673,12 +681,22 @@ class LlmPanel(QWidget):
 
         self.chk_llm = QCheckBox("Używaj LLM zamiast wyrażeń regularnych")
         self.chk_llm.setToolTip(
-            "Gdy włączone, program wysyła opis każdego ogłoszenia do lokalnego LLM\n"
-            "(Ollama) zamiast używać wbudowanych wzorców regex.\n"
-            "LLM rozumie niestandarowe opisy, ale skanowanie jest wolniejsze (1-5s/ogłoszenie).\n"
-            "Jeśli Ollama jest niedostępna, program automatycznie wraca do regex."
+            "Gdy włączone, program wysyła opis każdego ogłoszenia do LLM\n"
+            "zamiast używać wbudowanych wzorców regex.\n"
+            "LLM rozumie niestandarowe opisy, ale skanowanie jest wolniejsze.\n"
+            "Jeśli LLM jest niedostępny, program automatycznie wraca do regex."
         )
         self.chk_llm.toggled.connect(self._toggle)
+
+        self.provider = QComboBox()
+        self.provider.addItems(["Ollama (lokalny)", "OpenAI API"])
+        self.provider.setToolTip("Wybierz dostawcę LLM")
+        self.provider.currentIndexChanged.connect(self._switch_provider)
+
+        # ── Ollama ──────────────────────────────────────────────
+        self.ollama_widget = QWidget()
+        of = QFormLayout(self.ollama_widget)
+        of.setContentsMargins(0, 0, 0, 0)
 
         self.llm_url = QLineEdit("http://localhost:11434")
         self.llm_url.setPlaceholderText("http://localhost:11434")
@@ -700,28 +718,63 @@ class LlmPanel(QWidget):
         self.llm_timeout.setRange(5, 300)
         self.llm_timeout.setValue(60)
         self.llm_timeout.setSuffix(" s")
-        self.llm_timeout.setToolTip("Limit czasu oczekiwania na odpowiedź LLM.\nJeśli model jest wolny — zwiększ. Jeśli chcesz szybkiego fallbacku — zmniejsz.")
+        self.llm_timeout.setToolTip("Limit czasu oczekiwania na odpowiedź LLM.")
 
         self.btn_test = QPushButton("Test połączenia")
         self.btn_test.clicked.connect(self._test_connection)
 
+        of.addRow("URL Ollamy:", self.llm_url)
+        of.addRow("Model:", model_row)
+        of.addRow("Timeout:", self.llm_timeout)
+        of.addRow(self.btn_test)
+
+        # ── OpenAI ──────────────────────────────────────────────
+        self.openai_widget = QWidget()
+        af = QFormLayout(self.openai_widget)
+        af.setContentsMargins(0, 0, 0, 0)
+
+        self.openai_key = QLineEdit()
+        self.openai_key.setPlaceholderText("sk-...")
+        self.openai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.openai_key.setToolTip("Klucz API z platform.openai.com")
+
+        self.openai_model = QComboBox()
+        self.openai_model.setEditable(True)
+        self.openai_model.addItems(["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"])
+        self.openai_model.setToolTip("Model OpenAI (gpt-4o-mini jest najtańszy)")
+
+        self.openai_timeout = QSpinBox()
+        self.openai_timeout.setRange(5, 120)
+        self.openai_timeout.setValue(30)
+        self.openai_timeout.setSuffix(" s")
+
+        self.btn_test_openai = QPushButton("Test połączenia")
+        self.btn_test_openai.clicked.connect(self._test_openai_connection)
+
+        af.addRow("Klucz API:", self.openai_key)
+        af.addRow("Model:", self.openai_model)
+        af.addRow("Timeout:", self.openai_timeout)
+        af.addRow(self.btn_test_openai)
+
         gf.addRow(self.chk_llm)
-        gf.addRow("URL Ollamy:", self.llm_url)
-        gf.addRow("Model:", model_row)
-        gf.addRow("Timeout:", self.llm_timeout)
-        gf.addRow(self.btn_test)
+        gf.addRow("Dostawca:", self.provider)
+        gf.addRow(self.ollama_widget)
+        gf.addRow(self.openai_widget)
 
         layout.addWidget(grp)
         layout.addStretch()
 
         self._toggle(self.chk_llm.isChecked())
+        self._switch_provider(self.provider.currentIndex())
 
     def _toggle(self, enabled: bool):
-        self.llm_url.setEnabled(enabled)
-        self.llm_model.setEnabled(enabled)
-        self.llm_timeout.setEnabled(enabled)
-        self.btn_refresh.setEnabled(enabled)
-        self.btn_test.setEnabled(enabled)
+        self.provider.setEnabled(enabled)
+        self.ollama_widget.setEnabled(enabled)
+        self.openai_widget.setEnabled(enabled)
+
+    def _switch_provider(self, index: int):
+        self.ollama_widget.setVisible(index == 0)
+        self.openai_widget.setVisible(index == 1)
 
     def _refresh_models(self):
         url = self.llm_url.text().strip()
@@ -730,7 +783,6 @@ class LlmPanel(QWidget):
         self.llm_model.clear()
         if models:
             self.llm_model.addItems(models)
-            # Przywróć poprzedni wybór jeśli jest na liście
             idx = self.llm_model.findText(current)
             if idx >= 0:
                 self.llm_model.setCurrentIndex(idx)
@@ -752,16 +804,43 @@ class LlmPanel(QWidget):
         else:
             QMessageBox.warning(self, "Ollama – błąd", "Brak połączenia z Ollamą.\nUpewnij się że serwer jest uruchomiony.")
 
+    def _test_openai_connection(self):
+        import requests as req_lib
+        key = self.openai_key.text().strip()
+        if not key:
+            QMessageBox.warning(self, "OpenAI – błąd", "Wpisz klucz API.")
+            return
+        try:
+            resp = req_lib.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                QMessageBox.information(self, "OpenAI – OK", "Klucz API poprawny. Połączenie działa.")
+            elif resp.status_code == 401:
+                QMessageBox.warning(self, "OpenAI – błąd", "Nieprawidłowy klucz API (401 Unauthorized).")
+            else:
+                QMessageBox.warning(self, "OpenAI – błąd", f"Błąd połączenia: HTTP {resp.status_code}.")
+        except Exception as e:
+            QMessageBox.warning(self, "OpenAI – błąd", f"Brak połączenia z OpenAI:\n{e}")
+
     def get_config(self) -> dict:
         return {
-            "llm_enabled":  self.chk_llm.isChecked(),
-            "llm_url":      self.llm_url.text().strip(),
-            "llm_model":    self.llm_model.currentText().strip(),
-            "llm_timeout":  self.llm_timeout.value(),
+            "llm_enabled":    self.chk_llm.isChecked(),
+            "llm_provider":   "openai" if self.provider.currentIndex() == 1 else "ollama",
+            "llm_url":        self.llm_url.text().strip(),
+            "llm_model":      self.llm_model.currentText().strip(),
+            "llm_timeout":    self.llm_timeout.value(),
+            "openai_key":     self.openai_key.text().strip(),
+            "openai_model":   self.openai_model.currentText().strip(),
+            "openai_timeout": self.openai_timeout.value(),
         }
 
     def load(self, d: dict):
         self.chk_llm.setChecked(d.get("llm_enabled", False))
+        provider = d.get("llm_provider", "ollama")
+        self.provider.setCurrentIndex(1 if provider == "openai" else 0)
         self.llm_url.setText(d.get("llm_url", "http://localhost:11434"))
         self.llm_timeout.setValue(d.get("llm_timeout", 60))
         model = d.get("llm_model", "")
@@ -771,7 +850,16 @@ class LlmPanel(QWidget):
                 self.llm_model.setCurrentIndex(idx)
             else:
                 self.llm_model.setCurrentText(model)
+        self.openai_key.setText(d.get("openai_key", ""))
+        openai_model = d.get("openai_model", "gpt-4o-mini")
+        idx = self.openai_model.findText(openai_model)
+        if idx >= 0:
+            self.openai_model.setCurrentIndex(idx)
+        else:
+            self.openai_model.setCurrentText(openai_model)
+        self.openai_timeout.setValue(d.get("openai_timeout", 30))
         self._toggle(self.chk_llm.isChecked())
+        self._switch_provider(self.provider.currentIndex())
 
 
 # Glowne okno

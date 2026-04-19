@@ -791,6 +791,63 @@ def extract_extra_costs_llm(
         return extract_extra_costs(description, structured_extra)
 
 
+def extract_extra_costs_openai(
+    description: str,
+    structured_extra: int = 0,
+    api_key: str = "",
+    openai_model: str = "gpt-4o-mini",
+    timeout: int = 30,
+) -> tuple[int, list[str]]:
+    """
+    Analizuje opis ogłoszenia przez OpenAI API w poszukiwaniu dodatkowych kosztów.
+    Jeśli API jest niedostępne lub zwróci błędny JSON — fallback na regex.
+    """
+    if not description:
+        return 0, ["(brak opisu – koszty nieznane)"]
+    if not api_key:
+        logger.warning("Brak klucza OpenAI API – fallback na regex")
+        return extract_extra_costs(description, structured_extra)
+
+    prompt = LLM_PROMPT + description[:3000]
+
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": openai_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+
+        json_match = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
+        if not json_match:
+            raise ValueError(f"Brak JSON w odpowiedzi: {raw[:200]}")
+
+        data = json.loads(json_match.group(0))
+        extra_koszt = int(data.get("extra_koszt", 0))
+        pozycje = [str(p) for p in data.get("pozycje", [])]
+
+        if structured_extra > extra_koszt:
+            return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+
+        if extra_koszt == 0:
+            return 0, ["(OpenAI: brak dodatkowych kosztów w opisie)"]
+
+        return extra_koszt, pozycje
+
+    except requests.RequestException as e:
+        logger.warning("OpenAI API niedostępne (%s) – fallback na regex", e)
+        return extract_extra_costs(description, structured_extra)
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
+        logger.warning("Błąd parsowania odpowiedzi OpenAI (%s) – fallback na regex", e)
+        return extract_extra_costs(description, structured_extra)
+
+
 def fetch_ollama_models(llm_url: str) -> list[str]:
     """Pobiera listę dostępnych modeli z Ollamy. Zwraca [] jeśli niedostępna."""
     try:

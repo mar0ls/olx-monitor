@@ -976,6 +976,57 @@ class TestExtractExtraCostsLlm:
 
 
 # ─────────────────────────────────────────────────────────────
+#  extract_extra_costs_openai
+# ─────────────────────────────────────────────────────────────
+
+class TestExtractExtraCostsOpenAI:
+    def _mock_openai_response(self, extra_koszt: int, pozycje: list[str]) -> MagicMock:
+        payload = json.dumps({"extra_koszt": extra_koszt, "pozycje": pozycje})
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"choices": [{"message": {"content": payload}}]}
+        mock_resp.raise_for_status.return_value = None
+        return mock_resp
+
+    def test_returns_openai_result(self):
+        mock_resp = self._mock_openai_response(600, ["czynsz 600 zł"])
+        with patch("olx_scraper.requests.post", return_value=mock_resp):
+            total, items = scraper.extract_extra_costs_openai("opis", api_key="sk-test")
+        assert total == 600
+        assert items == ["czynsz 600 zł"]
+
+    def test_fallback_when_no_api_key(self):
+        desc = "czynsz administracyjny: 400 zł"
+        total, _ = scraper.extract_extra_costs_openai(desc, api_key="")
+        assert total == 400
+
+    def test_fallback_on_connection_error(self):
+        import requests as req_lib
+        desc = "czynsz administracyjny: 400 zł"
+        with patch("olx_scraper.requests.post", side_effect=req_lib.ConnectionError("timeout")):
+            total, _ = scraper.extract_extra_costs_openai(desc, api_key="sk-test")
+        assert total == 400
+
+    def test_fallback_on_invalid_json(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "nie wiem"}}]}
+        mock_resp.raise_for_status.return_value = None
+        desc = "czynsz administracyjny: 350 zł"
+        with patch("olx_scraper.requests.post", return_value=mock_resp):
+            total, _ = scraper.extract_extra_costs_openai(desc, api_key="sk-test")
+        assert total == 350
+
+    def test_structured_extra_wins_over_openai(self):
+        mock_resp = self._mock_openai_response(300, ["czynsz 300 zł"])
+        with patch("olx_scraper.requests.post", return_value=mock_resp):
+            total, _ = scraper.extract_extra_costs_openai("opis", api_key="sk-test", structured_extra=900)
+        assert total == 900
+
+    def test_empty_description_returns_zero(self):
+        total, _ = scraper.extract_extra_costs_openai("")
+        assert total == 0
+
+
+# ─────────────────────────────────────────────────────────────
 #  otodom_scraper
 # ─────────────────────────────────────────────────────────────
 

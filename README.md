@@ -93,7 +93,7 @@ python olx_gui.py
 ```
 
 Okno podzielone na dwie części:
-- **Lewa strona** – zakładki: *Ustawienia* (miasto, cena, metraż), *Powiadomienia* (iMessage, e-mail, plik), *LLM* (Ollama)
+- **Lewa strona** – zakładki: *Ustawienia* (miasto, cena, metraż), *Powiadomienia* (iMessage, e-mail, plik), *LLM* (Ollama lub OpenAI API)
 - **Prawa strona** – tabela wyników z sortowaniem + log skanowania
 
 Podwójne kliknięcie w wiersz tabeli otwiera ogłoszenie w przeglądarce.  
@@ -153,20 +153,23 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 
 Aby znaleźć ID dzielnicy dla innego miasta ręcznie: otwórz OLX, wybierz dzielnicę w filtrach i skopiuj wartość parametru `search[district_id]` z URL.
 
-## Analiza kosztów przez LLM (Ollama)
+## Analiza kosztów przez LLM (Ollama / OpenAI API)
 
-W zakładce **LLM** można przełączyć silnik analizy kosztów z wbudowanych wyrażeń regularnych na lokalny model językowy (LLM) uruchomiony przez [Ollama](https://ollama.com).
+W zakładce **LLM** można przełączyć silnik analizy kosztów z wbudowanych wyrażeń regularnych na model językowy. Do wyboru dwa dostawcy: lokalny **Ollama** lub **OpenAI API** (ChatGPT).
 
 ### Konfiguracja
 
 | Pole | Opis |
 |------|------|
 | Checkbox "Używaj LLM..." | Włącza/wyłącza LLM — gdy wyłączone, działa regex |
-| URL Ollamy | Adres serwera, domyślnie `http://localhost:11434` |
-| Model | Wybierz z listy (przycisk "Odśwież") lub wpisz ręcznie |
-| Test połączenia | Sprawdza dostępność serwera i wyświetla dostępne modele |
+| Dostawca | **Ollama (lokalny)** lub **OpenAI API** |
+| URL Ollamy | Adres serwera Ollamy, domyślnie `http://localhost:11434` |
+| Model (Ollama) | Wybierz z listy (przycisk "Odśwież") lub wpisz ręcznie |
+| Klucz API (OpenAI) | Klucz z [platform.openai.com](https://platform.openai.com) |
+| Model (OpenAI) | `gpt-4o-mini` (najtańszy), `gpt-4o`, `gpt-3.5-turbo` |
+| Test połączenia | Sprawdza dostępność serwera Ollamy |
 
-### Instalacja Ollamy i modelu
+### Ollama (lokalny, bez kosztów)
 
 ```bash
 # Zainstaluj Ollamę (macOS)
@@ -181,19 +184,24 @@ ollama pull mistral       # Mistral 7B – szybszy
 ollama pull SpeakLeash/bielik-11b-v3.0-instruct:Q5_K_M       # polski LLM – najlepiej rozumie polskie opisy
 ```
 
+### OpenAI API
+
+Podaj klucz API w polu **Klucz API**. Model `gpt-4o-mini` jest najtańszy i wystarczający do analizy kosztów — koszt to ułamki grosza za ogłoszenie.
+
 ### Zalety i ograniczenia
 
-| | Regex | LLM |
-|-|-------|-----|
-| Szybkość | < 0.1s/ogłoszenie | 1–5s/ogłoszenie |
-| Standardowe formaty | ✅ | ✅ |
-| Niestandardowe opisy | ❌ | ✅ |
-| Działa bez internetu | ✅ | ✅ (lokalnie) |
-| Wymaga Ollamy | ❌ | ✅ |
+| | Regex | Ollama | OpenAI API |
+|-|-------|--------|------------|
+| Szybkość | < 0.1s/ogłoszenie | 1–5s/ogłoszenie | 0.5–2s/ogłoszenie |
+| Standardowe formaty | ✅ | ✅ | ✅ |
+| Niestandardowe opisy | ❌ | ✅ | ✅ |
+| Działa bez internetu | ✅ | ✅ | ❌ |
+| Koszt | bezpłatny | bezpłatny | płatny (ułamki gr/ogłoszenie) |
+| Wymaga konfiguracji | ❌ | Ollama | Klucz API |
 
 Ogłoszenia z **otodom.pl** są zawsze analizowane osobnym parserem (`otodom_scraper.py`), który odczytuje dane z JSON-a wbudowanego w stronę Next.js — niezależnie od ustawienia LLM.
 
-Jeśli Ollama jest niedostępna podczas skanowania, program automatycznie wraca do regex bez przerywania pracy.
+Jeśli wybrany LLM jest niedostępny podczas skanowania, program automatycznie wraca do regex bez przerywania pracy.
 
 ## Jak działa analiza dodatkowych kosztów (regex)
 
