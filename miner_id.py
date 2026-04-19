@@ -50,7 +50,7 @@ def _make_headers() -> dict:
         "User-Agent": random.choice(_USER_AGENTS),
         "Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "DNT": "1",
     }
 
