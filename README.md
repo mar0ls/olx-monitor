@@ -107,7 +107,9 @@ Kolumna **AI** pokazuje ocenę 0-100. Po najechaniu kursorem widać krótkie uza
 Nad tabelą dostępne są szybkie filtry: wyszukiwanie tekstowe, minimalny próg AI, werdykt modelu i opcja pokazywania tylko ocenionych ogłoszeń.
 Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłoszeń, liczba ocenionych, shortlista (`AI >= 80`) i liczba ofert z wysokim ryzykiem kosztów.
 
-![Widok aplikacji](assets/view.png)
+![Widok aplikacji v1.0.0](assets/view.png)
+
+![Widok aplikacji v1.0.3](assets/view_new.png)
 
 **Kolorowanie wierszy:**
 
