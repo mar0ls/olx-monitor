@@ -80,7 +80,11 @@ add_data_arg() {
   local target_dir="$2"
 
   if [[ "$OS_NAME" == MINGW* || "$OS_NAME" == MSYS* || "$OS_NAME" == CYGWIN* || "$OS_NAME" == Windows_NT ]]; then
-    printf '%s;%s\n' "$source_path" "$target_dir"
+    local win_source="$source_path"
+    if command -v cygpath >/dev/null 2>&1; then
+      win_source="$(cygpath -w "$source_path")"
+    fi
+    printf '%s;%s\n' "$win_source" "$target_dir"
   else
     printf '%s:%s\n' "$source_path" "$target_dir"
   fi
