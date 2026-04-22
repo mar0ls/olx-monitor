@@ -67,7 +67,7 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
-          github-token: ${{ secrets.AUTO_APPROVE_TOKEN != '' && secrets.AUTO_APPROVE_TOKEN || github.token }}
+          github-token: ${{ secrets.AUTO_APPROVE_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const pull_number = Number(process.env.PR_NUMBER);
