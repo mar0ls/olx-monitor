@@ -52,7 +52,7 @@ ensure_ico() {
     return
   fi
 
-  "$PYTHON_CMD" -c "from PIL import Image; Image.open('$ROOT_DIR/assets/icon.png').save('$ROOT_DIR/icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+  "$PYTHON_CMD" -c "from pathlib import Path; import sys; from PIL import Image; root = Path(sys.argv[1]); Image.open(root / 'assets' / 'icon.png').save(root / 'icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])" "$ROOT_DIR"
 }
 
 ensure_icns() {
