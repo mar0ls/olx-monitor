@@ -30,6 +30,8 @@ jobs:
             const head = "dev";
             const base = "main";
 
+            core.setOutput("skip", "false");
+
             const openPrs = await github.rest.pulls.list({
               owner,
               repo,
@@ -41,28 +43,41 @@ jobs:
 
             let pr = openPrs.data[0];
             if (!pr) {
-              const created = await github.rest.pulls.create({
-                owner,
-                repo,
-                head,
-                base,
-                title: "Auto PR: dev -> main",
-                body: [
-                  "Automatyczny PR utworzony po udanym workflow `Tests` na gałęzi `dev`.",
-                  "",
-                  "- źródło: `dev`",
-                  "- cel: `main`",
-                  "- merge: auto-merge (squash)",
-                ].join("\n"),
-                maintainer_can_modify: true,
-              });
-              pr = created.data;
+              try {
+                const created = await github.rest.pulls.create({
+                  owner,
+                  repo,
+                  head,
+                  base,
+                  title: "Auto PR: dev -> main",
+                  body: [
+                    "Automatyczny PR utworzony po udanym workflow `Tests` na gałęzi `dev`.",
+                    "",
+                    "- źródło: `dev`",
+                    "- cel: `main`",
+                    "- merge: auto-merge (squash)",
+                  ].join("\n"),
+                  maintainer_can_modify: true,
+                });
+                pr = created.data;
+              } catch (error) {
+                const noDiff =
+                  error?.status === 422 &&
+                  String(error?.message || "").includes("No commits between");
+                if (noDiff) {
+                  core.info("Brak nowych commitów między dev i main - pomijam tworzenie PR.");
+                  core.setOutput("skip", "true");
+                  return;
+                }
+                throw error;
+              }
             }
 
             core.setOutput("number", String(pr.number));
             core.setOutput("node_id", pr.node_id);
 
       - name: Auto-approve PR (bot)
+        if: ${{ steps.pr.outputs.skip != 'true' }}
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
@@ -92,6 +107,7 @@ jobs:
             }
 
       - name: Włącz auto-merge (squash)
+        if: ${{ steps.pr.outputs.skip != 'true' }}
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
@@ -125,6 +141,7 @@ jobs:
             }
 
       - name: Spróbuj wykonać merge PR (fallback)
+        if: ${{ steps.pr.outputs.skip != 'true' }}
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
