@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import requests
 from bs4 import BeautifulSoup
@@ -33,6 +33,8 @@ REQUEST_TIMEOUT = 15          # s – timeout dla requests.get()
 DELAY_BETWEEN_PAGES = 2       # s – pauza między stronami wyników
 DELAY_BETWEEN_REQUESTS = 1    # s – pauza między pobieraniem szczegółów
 MAX_PAGES_UNLIMITED = 999     # strony – wartość "all" zamieniana na tę liczbę
+DEFAULT_SEEN_FILE = Path.home() / ".olx_scraper_seen.json"
+DEFAULT_OPENAI_MODELS = ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"]
 
 
 class Listing(TypedDict, total=False):
@@ -45,6 +47,13 @@ class Listing(TypedDict, total=False):
     url: str
     extra_koszt: int | None
     extra_pozycje: list[str]
+    ai_score: int | None
+    ai_verdict: str
+    ai_summary: str
+    ai_strengths: list[str]
+    ai_risks: list[str]
+    ai_hidden_cost_risk: str
+    ai_source: str
 
 # ─────────────────────────────────────────────────────────────
 #  KONFIGURACJA – dostosuj do swoich potrzeb
@@ -85,7 +94,7 @@ CONFIG = {
     "wyslij_imessage": False,
 
     # Plik do zapamiętywania już widzianych ogłoszeń
-    "seen_file": "seen_listings.json",
+    "seen_file": str(DEFAULT_SEEN_FILE),
 }
 # ─────────────────────────────────────────────────────────────
 
@@ -113,6 +122,53 @@ _POL_TRANS = str.maketrans({
 def _normalize_name(s: str) -> str:
     """Zamienia nazwę na klucz ASCII: małe litery, bez diakrytyków, spacje → myślniki."""
     return re.sub(r"[^a-z0-9]+", "-", s.lower().translate(_POL_TRANS)).strip("-")
+
+
+def _ensure_parent_dir(path: str | Path) -> Path:
+    """Tworzy katalog nadrzędny dla pliku, jeśli jeszcze nie istnieje."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """
+    Wyciąga pierwszy kompletny obiekt JSON z tekstu.
+
+    Modele lokalne i niektóre integracje potrafią owinąć JSON dodatkowymi
+    zdaniami. Zamiast polegać na kruchym regexie, przechodzimy po tekście
+    znak po znaku i pilnujemy zagnieżdżeń nawiasów klamrowych.
+    """
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("Brak obiektu JSON w odpowiedzi modelu")
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for idx, char in enumerate(text[start:], start=start):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            depth += 1
+            continue
+        if char == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start:idx + 1])
+
+    raise ValueError("Niekompletny obiekt JSON w odpowiedzi modelu")
 
 
 # Mapa dzielnic polskich miast woj. → district_id na OLX (kwiecień 2026)
@@ -652,6 +708,26 @@ KOSZT_PATTERNS = [
     r"ogrzewanie[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
     # "woda 50 zł / zimna/ciepła woda 80 zł"
     r"(?:zimna\s+|ciep[łl]a\s+)?woda[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
+    # "prąd 120 zł / energia elektryczna 90 zł"
+    r"(?:pr[aą]d|energia\s+elektryczna)[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
+    # "gaz 80 zł"
+    r"gaz[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
+    # "internet 70 zł / tv 50 zł"
+    r"(?:internet|tv|telewizja)[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
+    # "miejsce parkingowe 250 zł / garaż 300 zł"
+    r"(?:miejsce\s+postojowe|miejsce\s+parkingowe|parking|gara[zż])[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
+]
+
+# Wzmianki o kosztach bez podanej kwoty. Nie wpływają na sumę, ale są ważnym
+# sygnałem ryzyka przy filtrach i ocenie AI.
+UNKNOWN_COST_PATTERNS = [
+    (r"media\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "media według zużycia — kwota nieznana"),
+    (r"(?:pr[aą]d|energia\s+elektryczna)\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "prąd według zużycia — kwota nieznana"),
+    (r"gaz\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "gaz według zużycia — kwota nieznana"),
+    (r"woda\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "woda według zużycia — kwota nieznana"),
+    (r"ogrzewanie\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "ogrzewanie według zużycia — kwota nieznana"),
+    (r"czynsz\s+administracyjny\s+do\s+ustalenia", "czynsz administracyjny — kwota nieznana"),
+    (r"op[łl]aty\s+eksploatacyjne\s+do\s+ustalenia", "opłaty eksploatacyjne — kwota nieznana"),
 ]
 
 
@@ -713,15 +789,22 @@ def extract_extra_costs(
                 total_extra += kwota
                 found_items.append(f"{match.group(0).strip()} → {kwota} zł")
 
+    unknown_items: list[str] = []
+    for pattern, label in UNKNOWN_COST_PATTERNS:
+        if re.search(pattern, description, re.I):
+            unknown_items.append(label)
+
     if not found_items:
         if structured_extra > 0:
             return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+        if unknown_items:
+            return 0, unknown_items
         return 0, ["(nie znaleziono wzmianek o dodatkowych kosztach)"]
 
     if structured_extra > total_extra:
         return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
 
-    return total_extra, found_items
+    return total_extra, found_items + unknown_items
 
 
 LLM_PROMPT = """Przeanalizuj poniższy opis ogłoszenia o wynajmie mieszkania i wyodrębnij TYLKO dodatkowe koszty miesięczne, które NIE są wliczone w cenę najmu (np. czynsz administracyjny, media, opłaty eksploatacyjne, c.o., woda, śmieci, ogrzewanie, rachunki itp.).
@@ -738,6 +821,155 @@ Odpowiedz WYŁĄCZNIE w formacie JSON (bez markdown, bez wyjaśnień):
 
 Opis ogłoszenia:
 """
+
+LISTING_ASSESSMENT_PROMPT = """Oceń atrakcyjność ogłoszenia wynajmu mieszkania z perspektywy najemcy.
+
+Zasady:
+- Oceń relację cena/metraż, jakość opisu, przejrzystość kosztów i czerwone flagi.
+- Uwzględnij informacje o kosztach dodatkowych, ryzyko ukrytych opłat oraz brakujące dane.
+- Jeśli użytkownik podał priorytety, potraktuj je jako dodatkowy kontekst oceny.
+- Nie zakładaj faktów, których nie ma w danych. Jeśli czegoś brakuje, zaznacz to jako ryzyko.
+- Odpowiedz WYŁĄCZNIE w JSON.
+
+Wymagany format:
+{
+  "score": <liczba 0-100>,
+  "verdict": "kontaktuj" | "rozwaz" | "odpusc",
+  "summary": "krótkie uzasadnienie po polsku",
+  "strengths": ["krótki plus 1", "krótki plus 2"],
+  "risks": ["krótkie ryzyko 1", "krótkie ryzyko 2"],
+  "hidden_cost_risk": "low" | "medium" | "high"
+}
+
+Dane wejściowe:
+"""
+
+LISTING_ASSESSMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "verdict": {"type": "string", "enum": ["kontaktuj", "rozwaz", "odpusc"]},
+        "summary": {"type": "string"},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "hidden_cost_risk": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["score", "verdict", "summary", "strengths", "risks", "hidden_cost_risk"],
+    "additionalProperties": False,
+}
+
+
+def _build_listing_assessment_input(
+    listing: Listing,
+    description: str,
+    preferences: str = "",
+) -> str:
+    """Serializuje dane ogłoszenia do zwartego JSON-a przekazywanego modelowi."""
+    payload = {
+        "title": listing.get("title", ""),
+        "price": listing.get("price"),
+        "area_m2": listing.get("metraz"),
+        "location": listing.get("lokalizacja", ""),
+        "posted_at": listing.get("data", ""),
+        "url": listing.get("url", ""),
+        "extra_cost_total": listing.get("extra_koszt"),
+        "extra_cost_items": listing.get("extra_pozycje", []),
+        "user_preferences": preferences.strip(),
+        "description": description[:5000],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _normalize_listing_assessment(data: dict[str, Any], source: str) -> dict[str, Any]:
+    """Porządkuje wynik modelu i zabezpiecza aplikację przed niepełnymi polami."""
+    raw_score = data.get("score")
+    try:
+        score = max(0, min(100, int(raw_score)))
+    except (TypeError, ValueError):
+        score = None
+
+    verdict = str(data.get("verdict", "rozwaz")).strip().lower() or "rozwaz"
+    if verdict not in {"kontaktuj", "rozwaz", "odpusc"}:
+        verdict = "rozwaz"
+
+    hidden_cost_risk = str(data.get("hidden_cost_risk", "medium")).strip().lower() or "medium"
+    if hidden_cost_risk not in {"low", "medium", "high"}:
+        hidden_cost_risk = "medium"
+
+    strengths = [str(item).strip() for item in data.get("strengths", []) if str(item).strip()]
+    risks = [str(item).strip() for item in data.get("risks", []) if str(item).strip()]
+    summary = str(data.get("summary", "")).strip()
+
+    return {
+        "ai_score": score,
+        "ai_verdict": verdict,
+        "ai_summary": summary,
+        "ai_strengths": strengths,
+        "ai_risks": risks,
+        "ai_hidden_cost_risk": hidden_cost_risk,
+        "ai_source": source,
+    }
+
+
+def _empty_listing_assessment(source: str, reason: str) -> dict[str, Any]:
+    """Zwraca neutralny wynik, gdy ocena AI nie mogła zostać wykonana."""
+    return {
+        "ai_score": None,
+        "ai_verdict": "rozwaz",
+        "ai_summary": reason,
+        "ai_strengths": [],
+        "ai_risks": [],
+        "ai_hidden_cost_risk": "medium",
+        "ai_source": source,
+    }
+
+
+def _request_openai_json(
+    *,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    schema_name: str,
+    schema: dict[str, Any],
+    timeout: int,
+) -> dict[str, Any]:
+    """Wysyła żądanie do Chat Completions z `response_format=json_schema`."""
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": model,
+            "messages": messages,
+            "temperature": 0,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        },
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+    message = resp.json()["choices"][0]["message"]
+    if message.get("refusal"):
+        raise ValueError(f"Model odmówił odpowiedzi: {message['refusal']}")
+
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") in {"text", "output_text"}
+        )
+
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Pusta odpowiedź JSON z OpenAI")
+
+    return json.loads(content)
 
 
 def extract_extra_costs_llm(
@@ -764,13 +996,7 @@ def extract_extra_costs_llm(
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "")
-
-        # LLM czasem owija JSON tekstem — wyciągamy sam obiekt
-        json_match = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
-        if not json_match:
-            raise ValueError(f"Brak JSON w odpowiedzi LLM: {raw[:200]}")
-
-        data = json.loads(json_match.group(0))
+        data = _extract_json_object(raw)
         extra_koszt = int(data.get("extra_koszt", 0))
         pozycje = [str(p) for p in data.get("pozycje", [])]
 
@@ -811,24 +1037,22 @@ def extract_extra_costs_openai(
     prompt = LLM_PROMPT + description[:3000]
 
     try:
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": openai_model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
+        data = _request_openai_json(
+            api_key=api_key,
+            model=openai_model,
+            messages=[{"role": "user", "content": prompt}],
+            schema_name="listing_extra_costs",
+            schema={
+                "type": "object",
+                "properties": {
+                    "extra_koszt": {"type": "integer", "minimum": 0},
+                    "pozycje": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["extra_koszt", "pozycje"],
+                "additionalProperties": False,
             },
             timeout=timeout,
         )
-        resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
-
-        json_match = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
-        if not json_match:
-            raise ValueError(f"Brak JSON w odpowiedzi: {raw[:200]}")
-
-        data = json.loads(json_match.group(0))
         extra_koszt = int(data.get("extra_koszt", 0))
         pozycje = [str(p) for p in data.get("pozycje", [])]
 
@@ -848,6 +1072,67 @@ def extract_extra_costs_openai(
         return extract_extra_costs(description, structured_extra)
 
 
+def analyze_listing_with_ai(
+    listing: Listing,
+    description: str,
+    *,
+    provider: str = "ollama",
+    preferences: str = "",
+    llm_url: str = "http://localhost:11434",
+    llm_model: str = "llama3",
+    api_key: str = "",
+    openai_model: str = "gpt-4o-mini",
+    timeout: int = 30,
+) -> dict[str, Any]:
+    """
+    Wzbogaca ogłoszenie o ocenę AI.
+
+    Funkcja jest celowo oddzielona od ekstrakcji kosztów, żeby można było
+    włączać scoring niezależnie od filtra budżetu.
+    """
+    prompt = LISTING_ASSESSMENT_PROMPT + _build_listing_assessment_input(listing, description, preferences)
+
+    if provider == "openai":
+        if not api_key:
+            logger.warning("Brak klucza OpenAI API – pomijam ocenę AI")
+            return _empty_listing_assessment("openai", "Ocena AI niedostępna: brak klucza OpenAI API.")
+        try:
+            data = _request_openai_json(
+                api_key=api_key,
+                model=openai_model,
+                messages=[
+                    {"role": "system", "content": "Odpowiadasz wyłącznie poprawnym JSON-em."},
+                    {"role": "user", "content": prompt},
+                ],
+                schema_name="listing_assessment",
+                schema=LISTING_ASSESSMENT_SCHEMA,
+                timeout=timeout,
+            )
+            return _normalize_listing_assessment(data, f"OpenAI/{openai_model}")
+        except requests.RequestException as e:
+            logger.warning("OpenAI API niedostępne (%s) – pomijam ocenę AI", e)
+            return _empty_listing_assessment("openai", "Ocena AI niedostępna: brak połączenia z OpenAI.")
+        except (ValueError, KeyError, json.JSONDecodeError) as e:
+            logger.warning("Błąd parsowania oceny AI z OpenAI (%s)", e)
+            return _empty_listing_assessment("openai", "Ocena AI niedostępna: błędna odpowiedź modelu.")
+
+    try:
+        resp = requests.post(
+            f"{llm_url.rstrip('/')}/api/generate",
+            json={"model": llm_model, "prompt": prompt, "stream": False},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = _extract_json_object(resp.json().get("response", ""))
+        return _normalize_listing_assessment(data, f"Ollama/{llm_model}")
+    except requests.RequestException as e:
+        logger.warning("LLM niedostępny (%s) – pomijam ocenę AI", e)
+        return _empty_listing_assessment("ollama", "Ocena AI niedostępna: brak połączenia z Ollamą.")
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
+        logger.warning("Błąd parsowania oceny AI z LLM (%s)", e)
+        return _empty_listing_assessment("ollama", "Ocena AI niedostępna: błędna odpowiedź modelu.")
+
+
 def fetch_ollama_models(llm_url: str) -> list[str]:
     """Pobiera listę dostępnych modeli z Ollamy. Zwraca [] jeśli niedostępna."""
     try:
@@ -857,7 +1142,7 @@ def fetch_ollama_models(llm_url: str) -> list[str]:
         )
         resp.raise_for_status()
         return [m["name"] for m in resp.json().get("models", [])]
-    except Exception:
+    except (requests.RequestException, KeyError, TypeError, ValueError):
         return []
 
 
@@ -883,10 +1168,14 @@ def load_seen(path: str) -> set[str]:
 
 def save_seen(path: str, seen: set[str]) -> None:
     """Zapisuje zbiór widzianych ID ogłoszeń do pliku JSON."""
-    Path(path).write_text(
-        json.dumps(sorted(seen), ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
+    target = _ensure_parent_dir(path)
+    try:
+        target.write_text(
+            json.dumps(sorted(seen), ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except OSError as e:
+        logger.warning("Nie można zapisać pliku seen %s: %s", path, e)
 
 
 def print_header(config: dict) -> None:
@@ -920,6 +1209,16 @@ def print_listing(listing: dict) -> None:
     elif listing.get("extra_pozycje"):
         for item in listing.get("extra_pozycje", []):
             logger.info("  Info: %s", item)
+
+    if listing.get("ai_score") is not None:
+        logger.info(
+            "  AI: %s/100 (%s, ryzyko kosztów: %s)",
+            listing["ai_score"],
+            listing.get("ai_verdict", "rozwaz"),
+            listing.get("ai_hidden_cost_risk", "medium"),
+        )
+        if listing.get("ai_summary"):
+            logger.info("  AI note: %s", listing["ai_summary"])
 
     if listing["lokalizacja"]:
         logger.info("  Lokalizacja: %s", listing["lokalizacja"])
@@ -989,7 +1288,7 @@ def format_imessage(listing: dict) -> str:
     return msg
 
 
-#Zasadnicza funkcja skanująca i powiadamiająca o nowych ogłoszeniach
+# Główna pętla skanowania dla trybu CLI.
 def scrape_once(config: dict, seen: set[str]) -> int:
     """Skanuje OLX i powiadamia o nowych ogłoszeniach. Zwraca liczbę nowych."""
     print_header(config)
@@ -1025,28 +1324,73 @@ def scrape_once(config: dict, seen: set[str]) -> int:
                     seen.add(listing["id"])
                     continue
 
-            # Pobierz opis i wyciągnij dodatkowe koszty
+            # Szczegóły pobieramy tylko wtedy, gdy są potrzebne do filtrów albo AI.
             budzet = config.get("budzet_lacznie")
-            if budzet and listing["price"] is not None:
-                logger.info("    ↳ Sprawdzam opis: %s...", listing["url"].split("/")[-1][:40])
+            ai_enabled = config.get("ai_enabled", False)
+            should_fetch_detail = (budzet and listing["price"] is not None) or ai_enabled
+            opis = ""
+            structured_extra = 0
+
+            if should_fetch_detail:
+                logger.info("    ↳ Sprawdzam szczegóły: %s...", listing["url"].split("/")[-1][:40])
                 opis, structured_extra = fetch_detail(listing["url"])
-                extra_koszt, extra_pozycje = extract_extra_costs(opis, structured_extra)
+
+            if budzet and listing["price"] is not None:
+                use_llm = config.get("llm_enabled", False)
+                provider = config.get("llm_provider", "ollama")
+                if use_llm and provider == "openai":
+                    extra_koszt, extra_pozycje = extract_extra_costs_openai(
+                        opis,
+                        structured_extra,
+                        api_key=config.get("openai_key", ""),
+                        openai_model=config.get("openai_model", "gpt-4o-mini"),
+                        timeout=config.get("openai_timeout", 30),
+                    )
+                elif use_llm:
+                    extra_koszt, extra_pozycje = extract_extra_costs_llm(
+                        opis,
+                        structured_extra,
+                        llm_url=config.get("llm_url", "http://localhost:11434"),
+                        llm_model=config.get("llm_model", "llama3"),
+                        timeout=config.get("llm_timeout", 60),
+                    )
+                else:
+                    extra_koszt, extra_pozycje = extract_extra_costs(opis, structured_extra)
                 listing["extra_koszt"] = extra_koszt
                 listing["extra_pozycje"] = extra_pozycje
 
                 lacznie = listing["price"] + extra_koszt
                 if lacznie > budzet:
-                    logger.info("  odrzucone (%s + %s = %s zl > limit %s zl)",
-                                listing["price"], extra_koszt, lacznie, budzet)
+                    logger.info(
+                        "  odrzucone (%s + %s = %s zl > limit %s zl)",
+                        listing["price"], extra_koszt, lacznie, budzet,
+                    )
                     seen.add(listing["id"])
                     time.sleep(DELAY_BETWEEN_REQUESTS)
                     continue
-                else:
-                    logger.info("  ok (%s zl lacznie, limit: %s zl)", lacznie, budzet)
+                logger.info("  ok (%s zl lacznie, limit: %s zl)", lacznie, budzet)
                 time.sleep(DELAY_BETWEEN_REQUESTS)
             else:
                 listing["extra_koszt"] = None
                 listing["extra_pozycje"] = []
+
+            if ai_enabled:
+                listing.update(
+                    analyze_listing_with_ai(
+                        listing,
+                        opis,
+                        provider=config.get("llm_provider", "ollama"),
+                        preferences=config.get("ai_preferences", ""),
+                        llm_url=config.get("llm_url", "http://localhost:11434"),
+                        llm_model=config.get("llm_model", "llama3"),
+                        api_key=config.get("openai_key", ""),
+                        openai_model=config.get("openai_model", "gpt-4o-mini"),
+                        timeout=config.get(
+                            "openai_timeout" if config.get("llm_provider") == "openai" else "llm_timeout",
+                            30,
+                        ),
+                    )
+                )
 
             seen.add(listing["id"])
             new_count += 1

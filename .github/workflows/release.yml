@@ -28,7 +28,7 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact: olx-monitor-macos
+            artifact: olx-monitor-macos.zip
           - os: ubuntu-latest
             artifact: olx-monitor-linux
           - os: windows-latest
@@ -57,52 +57,12 @@ jobs:
       - name: Instalacja zależności Python
         run: pip install requests beautifulsoup4 PyQt6 pyinstaller Pillow
 
-      - name: Konwertuj ikonę (macOS → .icns)
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p icon.iconset
-          for sz in 16 32 64 128 256 512; do
-            sips -z $sz $sz assets/icon.png --out icon.iconset/icon_${sz}x${sz}.png
-            sips -z $((sz*2)) $((sz*2)) assets/icon.png --out icon.iconset/icon_${sz}x${sz}@2x.png
-          done
-          iconutil -c icns icon.iconset -o icon.icns
-
-      - name: Konwertuj ikonę (Linux/Windows → .ico)
-        if: runner.os != 'macOS'
-        run: python -c "from PIL import Image; Image.open('assets/icon.png').save('icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])"
-
-      - name: Zbuduj plik wykonywalny (macOS / Linux)
-        if: runner.os != 'Windows'
-        run: >
-          pyinstaller
-          --onefile
-          --name olx-monitor
-          --icon ${{ runner.os == 'macOS' && 'icon.icns' || 'icon.ico' }}
-          --hidden-import otodom_scraper
-          olx_gui.py
-
-      - name: Zbuduj plik wykonywalny (Windows)
-        if: runner.os == 'Windows'
-        run: >
-          pyinstaller
-          --onefile
-          --windowed
-          --name olx-monitor
-          --icon icon.ico
-          --hidden-import otodom_scraper
-          olx_gui.py
-
-      - name: Zmień nazwę artefaktu
+      - name: Build release artifact
         shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/olx-monitor.exe "dist/${{ matrix.artifact }}"
-          else
-            mv dist/olx-monitor "dist/${{ matrix.artifact }}"
-          fi
+        run: bash scripts/build_release.sh
 
       - name: Wgraj do GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.artifact }}
+          files: dist/release/${{ matrix.artifact }}
           generate_release_notes: true

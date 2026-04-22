@@ -5,7 +5,7 @@
 [![Release](https://img.shields.io/github/v/release/mar0ls/olx-monitor)](https://github.com/mar0ls/olx-monitor/releases/latest)
 
 
-# OLX Monitor – apartment rental monitor
+# OLX Monitor
 
 > **Polish apartment rental monitor for [OLX.pl](https://www.olx.pl).**  
 > Filters listings by price, area and total monthly cost (rent + extra fees), sends alerts via iMessage, e-mail or a text file. Runs as a CLI tool or a PyQt6 desktop GUI.  
@@ -15,7 +15,7 @@
 
 ---
 
-# OLX Monitor – wynajem mieszkań
+# OLX Monitor
 
 Monitor ogłoszeń o wynajmie mieszkań z OLX.pl z powiadomieniami przez iMessage, e-mail lub zapis do pliku. Działa w trybie CLI (terminal) i GUI (aplikacja desktopowa PyQt6).
 
@@ -23,10 +23,11 @@ Monitor ogłoszeń o wynajmie mieszkań z OLX.pl z powiadomieniami przez iMessag
 
 - Przeszukuje wiele stron wyników OLX z filtrami ceny i metrażu
 - Wykrywa dodatkowe koszty (czynsz administracyjny, media, rachunki) w opisie ogłoszenia i liczy **łączny koszt miesięczny**
+- Opcjonalnie ocenia ogłoszenia przez AI: wynik 0-100, klasyfikacja, krótkie uzasadnienie i ryzyko ukrytych kosztów
 - Zapamiętuje już widziane ogłoszenia — przy kolejnym uruchomieniu pomija duplikaty
 - Powiadamia przez **iMessage/SMS** (macOS) — osobny alert na każde ogłoszenie, **e-mail SMTP** — jeden zbiorczy po zakończeniu skanowania, lub **zapis do pliku TXT**
 - Tryb ciągły z konfigurowalnym interwałem (`--interval`)
-- Graficzny interfejs użytkownika z sortowaniem wyników i logiem skanowania
+- Graficzny interfejs użytkownika z sortowaniem wyników, filtrowaniem i logiem skanowania
 
 ## Wymagania
 
@@ -37,7 +38,7 @@ Monitor ogłoszeń o wynajmie mieszkań z OLX.pl z powiadomieniami przez iMessag
 
 ```bash
 # Sklonuj repozytorium
-git clone https://github.com/mar0ls/olx_monitor.git
+git clone https://github.com/mar0ls/olx-monitor.git
 cd olx-monitor
 
 # Utwórz i aktywuj środowisko wirtualne
@@ -66,9 +67,12 @@ CONFIG = {
     "max_stron":      3,            # lub "all"
     "imessage_numer": "+48600000000",
     "wyslij_imessage": True,
-    "seen_file":      "seen_listings.json",
+    # "seen_file":     "/pelna/sciezka/do/.olx_scraper_seen.json",  # opcjonalnie
 }
 ```
+
+Jeśli nie ustawisz `seen_file`, aplikacja domyślnie użyje wspólnego pliku:
+`~/.olx_scraper_seen.json`.
 
 Zamiast numeru `district_id` można wpisać nazwę dzielnicy jako `"dzielnica": "mokotow"` — scraper zamieni ją na odpowiedni ID automatycznie.
 
@@ -94,10 +98,14 @@ python olx_gui.py
 
 Okno podzielone na dwie części:
 - **Lewa strona** – zakładki: *Ustawienia* (miasto, cena, metraż), *Powiadomienia* (iMessage, e-mail, plik), *LLM* (Ollama lub OpenAI API)
-- **Prawa strona** – tabela wyników z sortowaniem + log skanowania
+- **Prawa strona** – tabela wyników z sortowaniem, kolumną **AI**, szybkimi filtrami i logiem skanowania
 
 Podwójne kliknięcie w wiersz tabeli otwiera ogłoszenie w przeglądarce.  
 Wybrany wiersz (lub kilka) można usunąć klawiszem **Delete** albo przez **prawy przycisk myszy → Usuń zaznaczone wiersze**.
+
+Kolumna **AI** pokazuje ocenę 0-100. Po najechaniu kursorem widać krótkie uzasadnienie, plusy, ryzyka i poziom ryzyka ukrytych kosztów.
+Nad tabelą dostępne są szybkie filtry: wyszukiwanie tekstowe, minimalny próg AI, werdykt modelu i opcja pokazywania tylko ocenionych ogłoszeń.
+Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłoszeń, liczba ocenionych, shortlista (`AI >= 80`) i liczba ofert z wysokim ryzykiem kosztów.
 
 ![Widok aplikacji](assets/view.png)
 
@@ -105,10 +113,10 @@ Wybrany wiersz (lub kilka) można usunąć klawiszem **Delete** albo przez **pra
 
 | Kolor | Znaczenie | Tooltip po najechaniu |
 |-------|-----------|----------------------|
-| 🟡 Żółty | Wykryto dodatkowe opłaty w opisie (czynsz administracyjny, media itp.) — kolumna *Łącznie* pokazuje sumę | Szczegóły: jakie opłaty i po ile |
-| 🟠 Pomarańczowy | Ogłoszenie pochodzi z **otodom.pl** — parser nie zwrócił danych (brak opisu i czynszu), rzeczywisty koszt nieznany | Wyjaśnienie dlaczego weryfikacja niemożliwa |
-| 🔵 Niebieski | Ogłoszenie z OLX, ale w opisie **nie znaleziono wzmianek** o dodatkowych kosztach — opłaty mogą być nieujawnione | Sugestia żeby zapytać właściciela o pełen koszt |
-| ⬜ Brak koloru | Cena kompletna lub opłaty wliczone w cenę | — |
+| Żółty | Wykryto dodatkowe opłaty w opisie (czynsz administracyjny, media itp.) — kolumna *Łącznie* pokazuje sumę | Szczegóły: jakie opłaty i po ile |
+| Pomarańczowy | Ogłoszenie pochodzi z **otodom.pl** — parser nie zwrócił danych (brak opisu i czynszu), rzeczywisty koszt nieznany | Wyjaśnienie, dlaczego weryfikacja nie była możliwa |
+| Niebieski | Ogłoszenie z OLX ma sygnały kosztowe wymagające ostrożności: brak jednoznacznych kwot albo koszty zależne od zużycia | Konkretne sygnały z opisu i sugestia dalszej weryfikacji |
+| Brak koloru | Cena kompletna lub opłaty wliczone w cenę | — |
 
 > Najedź kursorem myszy na dowolny podświetlony wiersz, aby zobaczyć szczegółowe wyjaśnienie.
 
@@ -153,21 +161,29 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 
 Aby znaleźć ID dzielnicy dla innego miasta ręcznie: otwórz OLX, wybierz dzielnicę w filtrach i skopiuj wartość parametru `search[district_id]` z URL.
 
-## Analiza kosztów przez LLM (Ollama / OpenAI API)
+## LLM i ocena AI
 
-W zakładce **LLM** można przełączyć silnik analizy kosztów z wbudowanych wyrażeń regularnych na model językowy. Do wyboru dwa dostawcy: lokalny **Ollama** lub **OpenAI API** (ChatGPT).
+W zakładce **LLM** można:
+
+- przełączyć analizę kosztów z wyrażeń regularnych na model językowy,
+- włączyć **ocenę AI ogłoszeń** z wynikiem 0-100,
+- podać własne **priorytety najemcy** (np. *balkon, metro, cicha okolica*), które model uwzględni przy scoringu.
+
+Do wyboru są dwa dostawcy: lokalny **Ollama** lub **OpenAI API**.
 
 ### Konfiguracja
 
 | Pole | Opis |
 |------|------|
-| Checkbox "Używaj LLM..." | Włącza/wyłącza LLM — gdy wyłączone, działa regex |
+| Checkbox "Używaj LLM..." | Włącza LLM do analizy kosztów zamiast regex |
+| Checkbox "Oceniaj ogłoszenia przez AI" | Dodaje ocenę 0-100 i krótkie uzasadnienie do każdego ogłoszenia |
+| Priorytety | Opcjonalny opis tego, na czym zależy Ci najbardziej |
 | Dostawca | **Ollama (lokalny)** lub **OpenAI API** |
 | URL Ollamy | Adres serwera Ollamy, domyślnie `http://localhost:11434` |
 | Model (Ollama) | Wybierz z listy (przycisk "Odśwież") lub wpisz ręcznie |
 | Klucz API (OpenAI) | Klucz z [platform.openai.com](https://platform.openai.com) |
-| Model (OpenAI) | `gpt-4o-mini` (najtańszy), `gpt-4o`, `gpt-3.5-turbo` |
-| Test połączenia | Sprawdza dostępność serwera Ollamy |
+| Model (OpenAI) | Domyślnie: `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4o` |
+| Test połączenia | Sprawdza połączenie z wybranym dostawcą |
 
 ### Ollama (lokalny, bez kosztów)
 
@@ -179,14 +195,26 @@ brew install ollama
 ollama serve
 
 # Pobierz model (wybierz jeden)
-ollama pull llama3        # Meta Llama 3 – dobry ogólnie
-ollama pull mistral       # Mistral 7B – szybszy
-ollama pull SpeakLeash/bielik-11b-v3.0-instruct:Q5_K_M       # polski LLM – najlepiej rozumie polskie opisy
+ollama pull llama3
+ollama pull mistral
+ollama pull SpeakLeash/bielik-11b-v3.0-instruct:Q5_K_M
 ```
+
+### Co robi ocena AI?
+
+Model ocenia m.in.:
+
+- relację **cena / metraż**,
+- kompletność i wiarygodność opisu,
+- ryzyko **ukrytych kosztów**,
+- czerwone flagi typu brak konkretów, niepełne koszty, zbyt lakoniczny opis,
+- zgodność z Twoimi priorytetami.
+
+Ocena AI nie zastępuje twardych filtrów. Ma pomóc szybciej ustalić, które oferty warto sprawdzić najpierw.
 
 ### OpenAI API
 
-Podaj klucz API w polu **Klucz API**. Model `gpt-4o-mini` jest najtańszy i wystarczający do analizy kosztów — koszt to ułamki grosza za ogłoszenie.
+Podaj klucz API w polu **Klucz API**. Domyślny model `gpt-4o-mini` zwykle wystarcza do analizy kosztów i scoringu ogłoszeń.
 
 ### Zalety i ograniczenia
 
@@ -225,12 +253,49 @@ requirements.txt    – zależności Python
 .gitignore          – pliki wykluczone z repozytorium
 ```
 
-## Uruchomienie testów
+## Uruchomienie testów i lintu
 
 ```bash
-pip install pytest
-pytest test_olx_scraper.py -v
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+
+pytest -q
+ruff check .
 ```
+
+## Lokalna kompilacja
+
+Projekt ma dwa tryby budowania:
+
+1. build developerski przez `spec`, przydatny do lokalnego testowania bundla `.app` na macOS,
+2. build release-like, który tworzy pojedynczy artefakt do dystrybucji.
+
+### Build developerski
+
+```bash
+venv/bin/pyinstaller olx-monitor.spec --noconfirm
+```
+
+Artefakty pojawią się w katalogu `dist/`:
+
+- `dist/olx-monitor` — katalog pomocniczy `PyInstaller` w trybie `onedir`
+- `dist/olx-monitor.app` — pakiet `.app` dla macOS
+
+Ten tryb jest wygodny do debugowania lokalnego bundla, ale nie jest najlepszy do publikacji, bo zostawia pełny katalog roboczy.
+
+### Build release-like
+
+```bash
+bash scripts/build_release.sh
+```
+
+Gotowy artefakt pojawi się w `dist/release/`:
+
+- macOS: `dist/release/olx-monitor-macos.zip`
+- Linux: `dist/release/olx-monitor-linux`
+- Windows: `dist/release/olx-monitor-windows.exe`
+
+Na macOS skrypt pakuje gotowe `olx-monitor.app` do pojedynczego archiwum ZIP, więc lokalny wynik wygląda tak samo jak artefakt do publikacji.
 
 Testy pokrywają:
 
@@ -247,14 +312,17 @@ Testy pokrywają:
 | `format_imessage` | formatowanie powiadomień |
 | `fetch_page` / `fetch_detail` | pobieranie stron (mock HTTP) |
 | `extract_extra_costs_llm` | analiza kosztów przez LLM (mock Ollama) |
+| `extract_extra_costs_openai` | analiza kosztów przez OpenAI API (mock HTTP) |
+| `analyze_listing_with_ai` | scoring AI ogłoszeń i normalizacja odpowiedzi modelu |
 | `fetch_ollama_models` | pobieranie listy modeli Ollamy (mock HTTP) |
 | `otodom_scraper` | parsowanie __NEXT_DATA__ z otodom.pl (mock HTTP) |
 
-## Bezpieczeństwo
+## Trwałość danych i bezpieczeństwo
 
 - Numer telefonu i treść wiadomości są escapowane przed wstawieniem do skryptu AppleScript (ochrona przed injection)
 - Hasło SMTP nie jest zapisywane do pliku konfiguracyjnego
-- Pliki `seen_listings.json` i `.olx_scraper_gui.json` są wykluczone z gita (`.gitignore`)
+- CLI i GUI współdzielą jeden plik pamięci widzianych ogłoszeń: `.olx_scraper_seen.json`
+- Pliki `.olx_scraper_seen.json` i `.olx_scraper_gui.json` są wykluczone z gita (`.gitignore`)
 
 ## Konfiguracja e-mail (SMTP)
 
@@ -326,11 +394,13 @@ Pobierz plik wykonywalny ze strony [Releases](../../releases) dla swojego system
 
 | System | Plik |
 |--------|------|
-| macOS | `olx-monitor-macos` (uruchom jako `.app` lub z terminala) |
+| macOS | `olx-monitor-macos.zip` |
 | Linux | `olx-monitor-linux` |
 | Windows | `olx-monitor-windows.exe` |
 
-> **Pierwsze uruchomienie trwa kilka sekund dłużej** — aplikacja rozpakowuje się do katalogu tymczasowego. Kolejne starty są szybsze dopóki katalog tymczasowy nie zostanie wyczyszczony.
+> Po pobraniu wersji dla macOS rozpakuj archiwum i uruchom `olx-monitor.app`.
+>
+> **Pierwsze uruchomienie trwa kilka sekund dłużej** głównie przy buildach jednoplikowych dla Linux i Windows, bo aplikacja rozpakowuje się do katalogu tymczasowego. Kolejne starty są szybsze dopóki katalog tymczasowy nie zostanie wyczyszczony.
 
 Na macOS może pojawić się ostrzeżenie o nieznanym deweloperze — przejdź do *Preferencje systemowe → Prywatność i bezpieczeństwo* i kliknij **Otwórz mimo to**.
 
@@ -356,9 +426,9 @@ Blokowane są jedynie: `/api/` (z wyjątkami), panele administracyjne, formularz
 
 ## Współpraca
 
-Pull requesty są mile widziane! 🤝  
-Jeśli chcesz dodać nową funkcję lub poprawić istniejącą — fork, branch, PR.  
-Przed wysłaniem upewnij się, że **wszystkie testy przechodzą** (`pytest test_olx_scraper.py -v`).
+Pull requesty są mile widziane.  
+Jeśli chcesz dodać nową funkcję lub poprawić istniejącą, przygotuj fork, branch i PR.  
+Przed wysłaniem upewnij się, że testy i lint przechodzą (`venv/bin/pytest -q` oraz `venv/bin/ruff check .`).
 
 ## Licencja
 
