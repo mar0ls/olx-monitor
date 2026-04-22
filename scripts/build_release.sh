@@ -93,10 +93,17 @@ case "$OS_NAME" in
   Darwin)
     ensure_icns
     build_with_pyinstaller \
-      "$ROOT_DIR/olx-monitor.spec" \
       --noconfirm \
+      --windowed \
+      --name olx-monitor \
+      --icon "$ROOT_DIR/assets/icon.icns" \
+      --add-data "$CHECKMARK_DATA" \
+      --add-data "$ICON_PNG_DATA" \
+      --hidden-import otodom_scraper \
       --distpath "$TMP_DIST" \
-      --workpath "$TMP_BUILD"
+      --workpath "$TMP_BUILD" \
+      --specpath "$TMP_SPEC" \
+      "$ROOT_DIR/olx_gui.py"
 
     ditto -c -k --sequesterRsrc --keepParent \
       "$TMP_DIST/olx-monitor.app" \
