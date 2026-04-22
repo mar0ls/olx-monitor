@@ -8,15 +8,13 @@ Uruchomienie:
 """
 
 import json
-import re
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 from bs4 import BeautifulSoup
 
 import olx_scraper as scraper
+import otodom_scraper
 
 # ─────────────────────────────────────────────────────────────
 #  Pomocnicze fabryki HTML
@@ -475,6 +473,17 @@ class TestExtractExtraCosts:
         total, items = scraper.extract_extra_costs(desc)
         assert total == 850
 
+    def test_media_wedlug_zuzycia_without_amount(self):
+        desc = "dodatkowo media według zużycia oraz prąd wg zużycia"
+        total, items = scraper.extract_extra_costs(desc)
+        assert total == 0
+        assert any("kwota nieznana" in item for item in items)
+
+    def test_parking_and_internet_costs(self):
+        desc = "miejsce parkingowe 250 zł, internet 70 zł"
+        total, items = scraper.extract_extra_costs(desc)
+        assert total == 320
+
 
 # ─────────────────────────────────────────────────────────────
 #  has_next_page
@@ -550,6 +559,11 @@ class TestSeenPersistence:
         scraper.save_seen(path, {"IDzzz", "IDaaa", "IDmmm"})
         data = json.loads(Path(path).read_text())
         assert data == sorted(data)
+
+    def test_save_creates_parent_directory(self, tmp_path):
+        path = tmp_path / "nested" / "state" / "seen.json"
+        scraper.save_seen(str(path), {"IDabc"})
+        assert path.exists()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1026,11 +1040,74 @@ class TestExtractExtraCostsOpenAI:
         assert total == 0
 
 
+class TestAnalyzeListingWithAI:
+    BASE_LISTING = {
+        "title": "2 pokoje przy metrze",
+        "price": 3200,
+        "metraz": 45.0,
+        "lokalizacja": "Warszawa, Mokotów",
+        "data": "dzisiaj",
+        "url": "https://www.olx.pl/oferta/test-IDai.html",
+        "extra_koszt": 500,
+        "extra_pozycje": ["czynsz administracyjny 500 zł"],
+    }
+
+    def _mock_ollama_response(self, payload: dict) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"response": json.dumps(payload, ensure_ascii=False)}
+        mock_resp.raise_for_status.return_value = None
+        return mock_resp
+
+    def _mock_openai_response(self, payload: dict) -> MagicMock:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"choices": [{"message": {"content": json.dumps(payload, ensure_ascii=False)}}]}
+        mock_resp.raise_for_status.return_value = None
+        return mock_resp
+
+    def test_ollama_assessment_is_normalized(self):
+        payload = {
+            "score": 88,
+            "verdict": "kontaktuj",
+            "summary": "Dobra relacja ceny do metrażu.",
+            "strengths": ["metro blisko"],
+            "risks": ["czynsz administracyjny"],
+            "hidden_cost_risk": "medium",
+        }
+        with patch("olx_scraper.requests.post", return_value=self._mock_ollama_response(payload)):
+            result = scraper.analyze_listing_with_ai(self.BASE_LISTING, "opis mieszkania", provider="ollama")
+        assert result["ai_score"] == 88
+        assert result["ai_verdict"] == "kontaktuj"
+        assert result["ai_hidden_cost_risk"] == "medium"
+
+    def test_openai_assessment_is_normalized(self):
+        payload = {
+            "score": 74,
+            "verdict": "rozwaz",
+            "summary": "Oferta wygląda sensownie, ale koszty są podwyższone.",
+            "strengths": ["dobry metraż"],
+            "risks": ["wyższy czynsz całkowity"],
+            "hidden_cost_risk": "low",
+        }
+        with patch("olx_scraper.requests.post", return_value=self._mock_openai_response(payload)):
+            result = scraper.analyze_listing_with_ai(
+                self.BASE_LISTING,
+                "opis mieszkania",
+                provider="openai",
+                api_key="sk-test",
+            )
+        assert result["ai_score"] == 74
+        assert result["ai_verdict"] == "rozwaz"
+        assert result["ai_source"].startswith("OpenAI/")
+
+    def test_openai_without_key_returns_empty_assessment(self):
+        result = scraper.analyze_listing_with_ai(self.BASE_LISTING, "opis", provider="openai", api_key="")
+        assert result["ai_score"] is None
+        assert "brak klucza" in result["ai_summary"].lower()
+
+
 # ─────────────────────────────────────────────────────────────
 #  otodom_scraper
 # ─────────────────────────────────────────────────────────────
-
-import otodom_scraper
 
 
 class TestOtodomScraper:

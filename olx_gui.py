@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PyQt6.QtCore import QSortFilterProxyModel, Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QStandardItem, QStandardItemModel
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QShortcut, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -54,6 +54,9 @@ import otodom_scraper
 logger = logging.getLogger(__name__)
 
 CONFIG_FILE = Path.home() / ".olx_scraper_gui.json"
+SEEN_FILE = engine.DEFAULT_SEEN_FILE
+AI_VERDICT_ROLE = Qt.ItemDataRole.UserRole + 1
+AI_RISK_ROLE = Qt.ItemDataRole.UserRole + 2
 
 # Stałe
 MAX_PAGES_LIMIT = 999
@@ -62,6 +65,34 @@ REQUEST_DELAY_DETAIL = 1      # sekundy między pobieraniem szczegółów
 TABS_WIDTH = 290
 LOG_MAX_HEIGHT = 170
 PROGRESS_BAR_HEIGHT = 14
+
+
+def _resolve_asset_path(name: str) -> Path | None:
+    """Zwraca ścieżkę do assetu w repozytorium lub w bundlu aplikacji."""
+    candidates = [
+        Path(__file__).with_name("assets") / name,
+        Path(getattr(sys, "_MEIPASS", "")) / "assets" / name,
+        Path(sys.executable).resolve().parent.parent / "Resources" / "assets" / name,
+    ]
+    for candidate in candidates:
+        if candidate and str(candidate) and candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_icon_path() -> Path | None:
+    """Zwraca ścieżkę do ikony aplikacji w source tree lub w zbudowanym `.app`."""
+    candidates = [
+        _resolve_asset_path("icon.icns"),
+        _resolve_asset_path("icon.png"),
+        Path(__file__).with_name("icon.icns"),
+        Path(getattr(sys, "_MEIPASS", "")) / "icon.icns",
+        Path(sys.executable).resolve().parent.parent / "Resources" / "icon.icns",
+    ]
+    for candidate in candidates:
+        if candidate and str(candidate) and candidate.exists():
+            return candidate
+    return None
 
 
 # Worker – skanowanie w osobnym wątku żeby nie zamrozić GUI
@@ -84,8 +115,8 @@ class ScrapeWorker(QThread):
         self._stop.set()
 
     def run(self) -> None:
-        config  = self.config
-        seen    = self.seen
+        config = self.config
+        seen = self.seen
         new_count = 0
 
         max_stron = config["max_stron"]
@@ -151,24 +182,35 @@ class ScrapeWorker(QThread):
                             seen.add(listing["id"])
                         continue
 
-                # analiza opisu + filtr budzetu lacznego
+                # Szczegóły pobieramy tylko wtedy, gdy są potrzebne do filtrów albo AI.
                 budzet = config.get("budzet_lacznie")
                 is_otodom = "otodom.pl" in listing["url"]
-                if budzet and listing["price"] is not None:
+                ai_enabled = config.get("ai_enabled", False)
+                needs_detail = (budzet and listing["price"] is not None) or ai_enabled
+                opis = ""
+                structured_extra = 0
+
+                if needs_detail:
                     short = listing["url"].split("/")[-1][:45]
                     if is_otodom:
-                        self.log_msg.emit(f"  Sprawdzam opis [otodom]: {short}...")
+                        self.log_msg.emit(f"  Pobieram szczegóły [otodom]: {short}...")
                         opis, structured_extra = otodom_scraper.fetch_otodom_detail(listing["url"])
+                    else:
+                        use_llm = config.get("llm_enabled")
+                        provider = config.get("llm_provider", "ollama")
+                        method = f"LLM/{provider}" if use_llm else "regex"
+                        self.log_msg.emit(f"  Pobieram szczegóły [{method}]: {short}...")
+                        opis, structured_extra = engine.fetch_detail(listing["url"])
+
+                if budzet and listing["price"] is not None:
+                    if is_otodom:
                         if not opis and structured_extra == 0:
-                            extra_koszt, extra_pozycje = 0, ["⚠ opłaty niezweryfikowane (otodom.pl)"]
+                            extra_koszt, extra_pozycje = 0, ["opłaty niezweryfikowane (otodom.pl)"]
                         else:
                             extra_koszt, extra_pozycje = engine.extract_extra_costs(opis, structured_extra)
                     else:
                         use_llm = config.get("llm_enabled")
                         provider = config.get("llm_provider", "ollama")
-                        method = f"LLM/{provider}" if use_llm else "regex"
-                        self.log_msg.emit(f"  Sprawdzam opis [{method}]: {short}...")
-                        opis, structured_extra = engine.fetch_detail(listing["url"])
                         if use_llm and provider == "openai":
                             extra_koszt, extra_pozycje = engine.extract_extra_costs_openai(
                                 opis, structured_extra,
@@ -200,10 +242,36 @@ class ScrapeWorker(QThread):
                     else:
                         suffix = " (opłaty niezweryfikowane)" if is_otodom and extra_koszt == 0 else ""
                         self.log_msg.emit(f"  OK: {lacznie} zl lacznie{suffix}")
-                    time.sleep(REQUEST_DELAY_DETAIL)
                 else:
                     listing.setdefault("extra_koszt", None)
                     listing.setdefault("extra_pozycje", [])
+
+                if ai_enabled:
+                    provider = config.get("llm_provider", "ollama")
+                    self.log_msg.emit(f"  Oceniam ogłoszenie przez AI [{provider}]...")
+                    listing.update(
+                        engine.analyze_listing_with_ai(
+                            listing,
+                            opis,
+                            provider=provider,
+                            preferences=config.get("ai_preferences", ""),
+                            llm_url=config.get("llm_url", "http://localhost:11434"),
+                            llm_model=config.get("llm_model", "llama3"),
+                            api_key=config.get("openai_key", ""),
+                            openai_model=config.get("openai_model", "gpt-4o-mini"),
+                            timeout=config.get(
+                                "openai_timeout" if provider == "openai" else "llm_timeout",
+                                30,
+                            ),
+                        )
+                    )
+                    if listing.get("ai_score") is not None:
+                        self.log_msg.emit(
+                            f"  AI: {listing['ai_score']}/100 ({listing.get('ai_verdict', 'rozwaz')})"
+                        )
+
+                if needs_detail:
+                    time.sleep(REQUEST_DELAY_DETAIL)
 
                 with self._lock:
                     seen.add(listing["id"])
@@ -263,6 +331,13 @@ def _send_summary_email(
             lines.append(f"    Dodatki: {extra} zl/mies.   Lacznie: {price + extra} zl/mies.")
             for item in listing.get("extra_pozycje", []):
                 lines.append(f"      - {item}")
+        if listing.get("ai_score") is not None:
+            lines.append(
+                f"    AI: {listing['ai_score']}/100 ({listing.get('ai_verdict', 'rozwaz')}, "
+                f"ryzyko kosztów: {listing.get('ai_hidden_cost_risk', 'medium')})"
+            )
+            if listing.get("ai_summary"):
+                lines.append(f"      {listing['ai_summary']}")
         if listing.get("lokalizacja"):
             lines.append(f"    Lokalizacja: {listing['lokalizacja']}")
         if listing.get("data"):
@@ -278,20 +353,43 @@ def _send_summary_email(
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
+    def _smtp_auth_hint(host: str) -> str:
+        host_l = (host or "").lower()
+        if "gmail" in host_l:
+            return "Dla Gmail wymagane jest haslo aplikacji (App Password), nie zwykle haslo konta."
+        if "outlook" in host_l or "hotmail" in host_l or "live.com" in host_l:
+            return "Sprawdz login (pelny adres e-mail), haslo konta i czy konto nie wymaga dodatkowej weryfikacji."
+        if "interia" in host_l or "poczta.interia" in host_l or "op.pl" in host_l or "pacz.to" in host_l:
+            return "W Interii wlacz dostep SMTP dla programow pocztowych w ustawieniach konta."
+        return "Sprawdz login, haslo, host i port SMTP."
+
     try:
         port = int(smtp_cfg["port"])
         if port == 465:
             with smtplib.SMTP_SSL(smtp_cfg["host"], port, timeout=15) as s:
+                s.ehlo()
                 s.login(smtp_cfg["user"], smtp_cfg["password"])
                 s.sendmail(smtp_cfg["user"], smtp_cfg["to"], msg.as_string())
         else:
             with smtplib.SMTP(smtp_cfg["host"], port, timeout=15) as s:
+                # Część serwerów SMTP (w tym wybrane konfiguracje Interii) wymaga
+                # jawnego EHLO przed i po STARTTLS, żeby poprawnie ustalić metody autoryzacji.
+                s.ehlo()
                 s.starttls()
+                s.ehlo()
                 s.login(smtp_cfg["user"], smtp_cfg["password"])
                 s.sendmail(smtp_cfg["user"], smtp_cfg["to"], msg.as_string())
         info = f"[OK] E-mail zbiorczy ({len(listings)} ogłoszeń) -> {smtp_cfg['to']}"
-    except smtplib.SMTPAuthenticationError:
-        info = "[ERR] Blad autoryzacji SMTP"
+    except smtplib.SMTPAuthenticationError as e:
+        reason = ""
+        if getattr(e, "smtp_error", None):
+            try:
+                reason = e.smtp_error.decode("utf-8", errors="ignore").strip()
+            except (AttributeError, UnicodeDecodeError):
+                reason = str(e.smtp_error)
+        hint = _smtp_auth_hint(smtp_cfg.get("host", ""))
+        details = f" ({reason})" if reason else ""
+        info = f"[ERR] Blad autoryzacji SMTP{details}. {hint}"
     except smtplib.SMTPException as e:
         info = f"[ERR] SMTP: {e}"
     except OSError as e:
@@ -303,7 +401,7 @@ def _send_summary_email(
 
 # Model tabeli wynikow
 
-COLUMNS = ["Lp.", "Tytul", "Czynsz (zl)", "Lacznie (zl)", "Metraz (m2)",
+COLUMNS = ["Lp.", "AI", "Tytul", "Czynsz (zl)", "Lacznie (zl)", "Metraz (m2)",
            "Lokalizacja", "Data dodania", "URL"]
 
 
@@ -315,12 +413,13 @@ class ResultsModel(QStandardItemModel):
 
     def add_listing(self, listing: dict) -> None:
         """Dodaje ogłoszenie jako nowy wiersz tabeli."""
-        price  = listing.get("price") or 0
-        extra  = listing.get("extra_koszt") or 0
+        price = listing.get("price") or 0
+        extra = listing.get("extra_koszt") or 0
         lacznie = price + extra if price else None
         lp = self.rowCount() + 1
+        ai_score = listing.get("ai_score")
 
-        def cell(val, is_num=False):
+        def cell(val, is_num=False, align_center=False):
             it = QStandardItem()
             if val is None:
                 it.setText("?")
@@ -329,6 +428,8 @@ class ResultsModel(QStandardItemModel):
                 if is_num:
                     it.setData(int(val), Qt.ItemDataRole.UserRole)
             it.setEditable(False)
+            if align_center:
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             return it
 
         metraz_str = f"{listing['metraz']:.1f}" if listing.get("metraz") else None
@@ -340,6 +441,7 @@ class ResultsModel(QStandardItemModel):
 
         row = [
             it_lp,
+            cell(ai_score, is_num=True, align_center=True),
             cell(listing.get("title", "")),
             cell(price or None, is_num=True),
             cell(lacznie, is_num=True),
@@ -348,51 +450,84 @@ class ResultsModel(QStandardItemModel):
             cell(listing.get("data", "")),
             cell(listing.get("url", "")),
         ]
+        row[1].setData(listing.get("ai_verdict", ""), AI_VERDICT_ROLE)
+        row[1].setData(listing.get("ai_hidden_cost_risk", ""), AI_RISK_ROLE)
 
         extra_pozycje = listing.get("extra_pozycje") or []
         pozycje_str = " ".join(extra_pozycje)
+        tooltip_lines: list[str] = []
 
         if extra > 0:
-            # Żółte — wykryto i wliczono dodatkowe opłaty
-            tooltip = (
+            tooltip_lines.extend([
                 f"Wykryto dodatkowe opłaty: {extra} zł\n"
                 f"Czynsz {price} zł + opłaty {extra} zł = łącznie {price + extra} zł"
-            )
+            ])
             bg, fg = "#fef3cd", "#5c4000"
         elif "otodom.pl" in pozycje_str:
-            # Pomarańczowe — ogłoszenie z otodom.pl, opłaty nieweryfikowalne
-            tooltip = (
-                "⚠ Ogłoszenie pochodzi z otodom.pl\n"
+            tooltip_lines.extend([
+                "Ogłoszenie pochodzi z otodom.pl\n"
                 "Program nie może odczytać dodatkowych opłat z tego serwisu\n"
                 "(czynsz administracyjny, media, itp.).\n"
                 "Rzeczywisty koszt miesięczny może przekraczać podaną cenę.\n"
                 "Sprawdź ogłoszenie ręcznie przed kontaktem."
-            )
+            ])
             bg, fg = "#ffe8d0", "#7a3300"
         elif extra_pozycje:
-            # Niebieskie — OLX, przeszukano opis i nie znaleziono wzmianek o kosztach
-            tooltip = (
-                "ℹ Nie znaleziono wzmianek o dodatkowych kosztach w opisie.\n"
-                "Opłaty mogą być nieujawnione w tekście\n"
-                "(np. media, czynsz administracyjny do spółdzielni).\n"
-                "Warto zapytać właściciela o pełny koszt miesięczny."
-            )
+            tooltip_lines.append("Sygnały kosztowe z opisu:")
+            tooltip_lines.extend(f"- {item}" for item in extra_pozycje)
             bg, fg = "#dceefb", "#1a4a6b"
         else:
             bg, fg = None, None
+
+        if ai_score is not None:
+            tooltip_lines.extend([
+                "",
+                f"AI: {ai_score}/100 ({listing.get('ai_verdict', 'rozwaz')})",
+            ])
+            if listing.get("ai_summary"):
+                tooltip_lines.append(listing["ai_summary"])
+            for item in listing.get("ai_strengths", [])[:2]:
+                tooltip_lines.append(f"+ {item}")
+            for item in listing.get("ai_risks", [])[:2]:
+                tooltip_lines.append(f"- {item}")
+            tooltip_lines.append(f"Ryzyko ukrytych kosztów: {listing.get('ai_hidden_cost_risk', 'medium')}")
+
+        tooltip = "\n".join(line for line in tooltip_lines if line is not None)
 
         if bg:
             for it in row:
                 it.setBackground(QColor(bg))
                 it.setForeground(QColor(fg))
                 it.setToolTip(tooltip)
+        elif tooltip:
+            for it in row:
+                it.setToolTip(tooltip)
+
+        if ai_score is not None and not bg:
+            ai_item = row[1]
+            if ai_score >= 80:
+                ai_bg, ai_fg = "#e8f5e9", "#1b5e20"
+            elif ai_score >= 60:
+                ai_bg, ai_fg = "#e3f2fd", "#0d47a1"
+            else:
+                ai_bg, ai_fg = "#ffebee", "#b71c1c"
+            ai_item.setBackground(QColor(ai_bg))
+            ai_item.setForeground(QColor(ai_fg))
+            ai_item.setToolTip(tooltip)
 
         self.appendRow(row)
 
 
 class SortableProxyModel(QSortFilterProxyModel):
-    """Sortuje numerycznie kolumny z liczbami (Lp., cena, metraz)."""
-    NUM_COLS = {0, 2, 3, 4}  # Lp., Czynsz, Lacznie, Metraz
+    """Sortuje numerycznie kolumny z liczbami w tabeli wyników."""
+    NUM_COLS = {0, 1, 3, 4, 5}  # Lp., AI, Czynsz, Lacznie, Metraz
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._search_text = ""
+        self._min_ai_score: int | None = None
+        self._verdict_filter = "all"
+        self._hide_unscored = False
 
     def lessThan(self, left, right):  # noqa: N802
         if left.column() in self.NUM_COLS:
@@ -401,8 +536,54 @@ class SortableProxyModel(QSortFilterProxyModel):
             try:
                 return (lv or 0) < (rv or 0)
             except TypeError:
-                pass
+                return super().lessThan(left, right)
         return super().lessThan(left, right)
+
+    def set_search_text(self, text: str) -> None:
+        self._search_text = text.strip().lower()
+        self.invalidateFilter()
+
+    def set_min_ai_score(self, value: int | None) -> None:
+        self._min_ai_score = value
+        self.invalidateFilter()
+
+    def set_verdict_filter(self, verdict: str) -> None:
+        self._verdict_filter = verdict
+        self.invalidateFilter()
+
+    def set_hide_unscored(self, enabled: bool) -> None:
+        self._hide_unscored = enabled
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row: int, source_parent) -> bool:  # noqa: N802
+        model = self.sourceModel()
+        if model is None:
+            return True
+
+        ai_index = model.index(source_row, 1, source_parent)
+        title_index = model.index(source_row, 2, source_parent)
+        location_index = model.index(source_row, 6, source_parent)
+        url_index = model.index(source_row, 8, source_parent)
+
+        ai_score = model.data(ai_index, Qt.ItemDataRole.UserRole)
+        verdict = model.data(ai_index, AI_VERDICT_ROLE) or ""
+
+        if self._hide_unscored and ai_score is None:
+            return False
+        if self._min_ai_score is not None and (ai_score is None or ai_score < self._min_ai_score):
+            return False
+        if self._verdict_filter != "all" and verdict != self._verdict_filter:
+            return False
+
+        if self._search_text:
+            haystack = " ".join(
+                str(model.data(index, Qt.ItemDataRole.DisplayRole) or "").lower()
+                for index in (title_index, location_index, url_index)
+            )
+            if self._search_text not in haystack:
+                return False
+
+        return True
 
 
 
@@ -553,12 +734,14 @@ class NotifyPanel(QWidget):
         plik = QGroupBox("Zapis do pliku")
         plf  = QFormLayout(plik)
         self.chk_plik = QCheckBox("Zapisuj nowe ogloszenia do pliku")
+        self.chk_plik.toggled.connect(self._toggle_sections)
         row = QHBoxLayout()
         self.file_path = QLineEdit()
         self.file_path.setPlaceholderText("np. ~/wyniki_olx.txt")
         btn = QPushButton("...")
         btn.setFixedWidth(28)
         btn.clicked.connect(self._browse)
+        self.btn_browse = btn
         row.addWidget(self.file_path)
         row.addWidget(btn)
         plf.addRow(self.chk_plik)
@@ -569,6 +752,7 @@ class NotifyPanel(QWidget):
         sms = QGroupBox("SMS / iMessage  (macOS)")
         sf  = QFormLayout(sms)
         self.chk_sms   = QCheckBox("Wysylaj przez Messages.app")
+        self.chk_sms.toggled.connect(self._toggle_sections)
         self.sms_nr    = QLineEdit()
         self.sms_nr.setPlaceholderText("+48600000000")
         sf.addRow(self.chk_sms)
@@ -579,6 +763,7 @@ class NotifyPanel(QWidget):
         email = QGroupBox("E-mail (SMTP)")
         ef    = QFormLayout(email)
         self.chk_email  = QCheckBox("Wysylaj e-mail")
+        self.chk_email.toggled.connect(self._toggle_sections)
         self.smtp_host  = QLineEdit("smtp.gmail.com")
         self.smtp_port  = QSpinBox()
         self.smtp_port.setRange(1, 65535)
@@ -592,6 +777,7 @@ class NotifyPanel(QWidget):
         self.smtp_to.setPlaceholderText("odbiorca@example.com")
         btn_test = QPushButton("Wyslij testowy e-mail")
         btn_test.clicked.connect(self._test_email)
+        self.btn_test_email = btn_test
         ef.addRow(self.chk_email)
         ef.addRow("Serwer:", self.smtp_host)
         ef.addRow("Port:", self.smtp_port)
@@ -602,6 +788,7 @@ class NotifyPanel(QWidget):
         layout.addWidget(email)
 
         layout.addStretch()
+        self._toggle_sections()
 
     def _browse(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -624,7 +811,11 @@ class NotifyPanel(QWidget):
         }
         _send_summary_email(
             [dummy], smtp, {"miasto": "test"},
-            log_fn=lambda m: QMessageBox.information(self, "Wynik testu", m),
+            log_fn=lambda m: (
+                QMessageBox.warning(self, "Wynik testu", m)
+                if m.startswith("[ERR]")
+                else QMessageBox.information(self, "Wynik testu", m)
+            ),
         )
 
     def get_smtp(self) -> dict | None:
@@ -660,13 +851,34 @@ class NotifyPanel(QWidget):
         self.smtp_user.setText(smtp.get("user", ""))
         self.smtp_to.setText(smtp.get("to", ""))
         # Nie ładuj hasła do SMTP – użytkownik musi wpisać ręcznie !
+        self._toggle_sections()
+
+    def _toggle_sections(self) -> None:
+        """Utrzymuje stan kontrolek spójny z wybranymi kanałami powiadomień."""
+        file_enabled = self.chk_plik.isChecked()
+        self.file_path.setEnabled(file_enabled)
+        self.btn_browse.setEnabled(file_enabled)
+
+        sms_enabled = self.chk_sms.isChecked()
+        self.sms_nr.setEnabled(sms_enabled)
+
+        email_enabled = self.chk_email.isChecked()
+        for widget in (
+            self.smtp_host,
+            self.smtp_port,
+            self.smtp_user,
+            self.smtp_pass,
+            self.smtp_to,
+            self.btn_test_email,
+        ):
+            widget.setEnabled(email_enabled)
 
 
 
 # Panel LLM (Ollama / OpenAI)
 
 class LlmPanel(QWidget):
-    """Panel konfiguracji analizy kosztów przez LLM (Ollama lub OpenAI API)."""
+    """Panel konfiguracji funkcji LLM: ekstrakcji kosztów i oceny AI."""
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build()
@@ -676,7 +888,7 @@ class LlmPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(8)
 
-        grp = QGroupBox("Analiza kosztów przez LLM")
+        grp = QGroupBox("LLM i ocena AI")
         gf  = QFormLayout(grp)
 
         self.chk_llm = QCheckBox("Używaj LLM zamiast wyrażeń regularnych")
@@ -687,6 +899,13 @@ class LlmPanel(QWidget):
             "Jeśli LLM jest niedostępny, program automatycznie wraca do regex."
         )
         self.chk_llm.toggled.connect(self._toggle)
+
+        self.chk_ai_eval = QCheckBox("Oceniaj ogłoszenia przez AI")
+        self.chk_ai_eval.setToolTip(
+            "Dodaje ocenę 0-100, krótkie podsumowanie i listę ryzyk.\n"
+            "Scoring działa niezależnie od filtra budżetu."
+        )
+        self.chk_ai_eval.toggled.connect(self._toggle)
 
         self.provider = QComboBox()
         self.provider.addItems(["Ollama (lokalny)", "OpenAI API"])
@@ -718,14 +937,16 @@ class LlmPanel(QWidget):
         self.llm_timeout.setRange(5, 300)
         self.llm_timeout.setValue(60)
         self.llm_timeout.setSuffix(" s")
-        self.llm_timeout.setToolTip("Limit czasu oczekiwania na odpowiedź LLM.")
+        self.llm_timeout.setToolTip(
+            f"Limit czasu oczekiwania na odpowiedź LLM (maksymalnie {self.llm_timeout.maximum()} s)."
+        )
 
         self.btn_test = QPushButton("Test połączenia")
         self.btn_test.clicked.connect(self._test_connection)
 
         of.addRow("URL Ollamy:", self.llm_url)
         of.addRow("Model:", model_row)
-        of.addRow("Timeout:", self.llm_timeout)
+        of.addRow(f"Timeout (max {self.llm_timeout.maximum()} s):", self.llm_timeout)
         of.addRow(self.btn_test)
 
         # ── OpenAI ──────────────────────────────────────────────
@@ -740,23 +961,34 @@ class LlmPanel(QWidget):
 
         self.openai_model = QComboBox()
         self.openai_model.setEditable(True)
-        self.openai_model.addItems(["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"])
-        self.openai_model.setToolTip("Model OpenAI (gpt-4o-mini jest najtańszy)")
+        self.openai_model.addItems(engine.DEFAULT_OPENAI_MODELS)
+        self.openai_model.setToolTip("Model OpenAI dla ekstrakcji kosztów i scoringu")
 
         self.openai_timeout = QSpinBox()
         self.openai_timeout.setRange(5, 120)
         self.openai_timeout.setValue(30)
         self.openai_timeout.setSuffix(" s")
+        self.openai_timeout.setToolTip(
+            f"Limit czasu oczekiwania na odpowiedź OpenAI (maksymalnie {self.openai_timeout.maximum()} s)."
+        )
 
         self.btn_test_openai = QPushButton("Test połączenia")
         self.btn_test_openai.clicked.connect(self._test_openai_connection)
 
+        self.ai_preferences = QLineEdit()
+        self.ai_preferences.setPlaceholderText("np. balkon, dobra komunikacja, cicha okolica")
+        self.ai_preferences.setToolTip(
+            "Opcjonalne priorytety najemcy. AI uwzględni je przy ocenie ogłoszeń."
+        )
+
         af.addRow("Klucz API:", self.openai_key)
         af.addRow("Model:", self.openai_model)
-        af.addRow("Timeout:", self.openai_timeout)
+        af.addRow(f"Timeout (max {self.openai_timeout.maximum()} s):", self.openai_timeout)
         af.addRow(self.btn_test_openai)
 
         gf.addRow(self.chk_llm)
+        gf.addRow(self.chk_ai_eval)
+        gf.addRow("Priorytety:", self.ai_preferences)
         gf.addRow("Dostawca:", self.provider)
         gf.addRow(self.ollama_widget)
         gf.addRow(self.openai_widget)
@@ -767,10 +999,12 @@ class LlmPanel(QWidget):
         self._toggle(self.chk_llm.isChecked())
         self._switch_provider(self.provider.currentIndex())
 
-    def _toggle(self, enabled: bool):
-        self.provider.setEnabled(enabled)
-        self.ollama_widget.setEnabled(enabled)
-        self.openai_widget.setEnabled(enabled)
+    def _toggle(self, _enabled: bool):
+        active = self.chk_llm.isChecked() or self.chk_ai_eval.isChecked()
+        self.provider.setEnabled(active)
+        self.ai_preferences.setEnabled(self.chk_ai_eval.isChecked())
+        self.ollama_widget.setEnabled(active)
+        self.openai_widget.setEnabled(active)
 
     def _switch_provider(self, index: int):
         self.ollama_widget.setVisible(index == 0)
@@ -799,7 +1033,7 @@ class LlmPanel(QWidget):
         if models:
             QMessageBox.information(
                 self, "Ollama – OK",
-                f"Połączenie OK.\nDostępne modele ({len(models)}):\n" + "\n".join(f"  • {m}" for m in models)
+                f"Połączenie OK.\nDostępne modele ({len(models)}):\n" + "\n".join(f"  - {m}" for m in models)
             )
         else:
             QMessageBox.warning(self, "Ollama – błąd", "Brak połączenia z Ollamą.\nUpewnij się że serwer jest uruchomiony.")
@@ -822,12 +1056,14 @@ class LlmPanel(QWidget):
                 QMessageBox.warning(self, "OpenAI – błąd", "Nieprawidłowy klucz API (401 Unauthorized).")
             else:
                 QMessageBox.warning(self, "OpenAI – błąd", f"Błąd połączenia: HTTP {resp.status_code}.")
-        except Exception as e:
+        except req_lib.RequestException as e:
             QMessageBox.warning(self, "OpenAI – błąd", f"Brak połączenia z OpenAI:\n{e}")
 
     def get_config(self) -> dict:
         return {
             "llm_enabled":    self.chk_llm.isChecked(),
+            "ai_enabled":     self.chk_ai_eval.isChecked(),
+            "ai_preferences": self.ai_preferences.text().strip(),
             "llm_provider":   "openai" if self.provider.currentIndex() == 1 else "ollama",
             "llm_url":        self.llm_url.text().strip(),
             "llm_model":      self.llm_model.currentText().strip(),
@@ -839,6 +1075,8 @@ class LlmPanel(QWidget):
 
     def load(self, d: dict):
         self.chk_llm.setChecked(d.get("llm_enabled", False))
+        self.chk_ai_eval.setChecked(d.get("ai_enabled", False))
+        self.ai_preferences.setText(d.get("ai_preferences", ""))
         provider = d.get("llm_provider", "ollama")
         self.provider.setCurrentIndex(1 if provider == "openai" else 0)
         self.llm_url.setText(d.get("llm_url", "http://localhost:11434"))
@@ -876,8 +1114,9 @@ class MainWindow(QMainWindow):
         self._seen_lock               = threading.Lock()
         self._worker: ScrapeWorker | None = None
 
-        self._load_seen()
         self._build_ui()
+        self._apply_style()
+        self._load_seen()
         self._load_config()
 
     # UI
@@ -922,9 +1161,9 @@ class MainWindow(QMainWindow):
         self.table.setWordWrap(False)
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Lp.
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)            # Tytul
-        hh.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)            # URL
-        for col, w in [(2, 95), (3, 100), (4, 85), (5, 160), (6, 130)]:
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)            # Tytul
+        hh.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)            # URL
+        for col, w in [(1, 65), (3, 95), (4, 100), (5, 85), (6, 160), (7, 130)]:
             self.table.setColumnWidth(col, w)
         self.table.verticalHeader().setVisible(False)
         self.table.doubleClicked.connect(self._open_url)
@@ -938,6 +1177,69 @@ class MainWindow(QMainWindow):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context_menu)
 
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("Szukaj:"))
+        self.filter_text = QLineEdit()
+        self.filter_text.setPlaceholderText("tytuł, lokalizacja lub URL")
+        self.filter_text.textChanged.connect(self._apply_table_filters)
+        filters.addWidget(self.filter_text, stretch=1)
+
+        filters.addWidget(QLabel("Min. ocena:"))
+        self.filter_ai_min = QComboBox()
+        self.filter_ai_min.addItem("brak", None)
+        self.filter_ai_min.addItem("od 60", 60)
+        self.filter_ai_min.addItem("od 70", 70)
+        self.filter_ai_min.addItem("od 80", 80)
+        self.filter_ai_min.setToolTip("Pokaż tylko oferty z oceną AI od wybranego progu.")
+        self.filter_ai_min.currentIndexChanged.connect(self._apply_table_filters)
+        filters.addWidget(self.filter_ai_min)
+
+        filters.addWidget(QLabel("Rekomendacja:"))
+        self.filter_verdict = QComboBox()
+        self.filter_verdict.addItem("wszystkie", "all")
+        self.filter_verdict.addItem("kontaktuj", "kontaktuj")
+        self.filter_verdict.addItem("rozważ", "rozwaz")
+        self.filter_verdict.addItem("odpuść", "odpusc")
+        self.filter_verdict.setToolTip("Filtruj oferty po rekomendacji AI.")
+        self.filter_verdict.currentIndexChanged.connect(self._apply_table_filters)
+        filters.addWidget(self.filter_verdict)
+
+        self.filter_scored_only = QCheckBox("tylko z oceną AI")
+        self.filter_scored_only.setToolTip("Ukryj oferty, które nie mają jeszcze oceny AI.")
+        self.filter_scored_only.toggled.connect(self._apply_table_filters)
+        filters.addWidget(self.filter_scored_only)
+
+        self.btn_filter_reset = QPushButton("Wyczysc filtry")
+        self.btn_filter_reset.clicked.connect(self._reset_table_filters)
+        filters.addWidget(self.btn_filter_reset)
+
+        rl.addLayout(filters)
+
+        summary = QHBoxLayout()
+        self.lbl_visible = QLabel("Widoczne: 0")
+        self.lbl_scored = QLabel("Z oceną AI: 0")
+        self.lbl_shortlist = QLabel("Mocne oferty: 0")
+        self.lbl_high_risk = QLabel("Ryzyko kosztów: 0")
+        self.lbl_filter_state = QLabel("Aktywne filtry: brak")
+        self.lbl_filter_state.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_visible.setToolTip("Liczba ofert widocznych po zastosowaniu filtrów.")
+        self.lbl_scored.setToolTip("Liczba widocznych ofert, które mają już ocenę AI.")
+        self.lbl_shortlist.setToolTip("Widoczne oferty z oceną AI co najmniej 80/100.")
+        self.lbl_high_risk.setToolTip("Widoczne oferty oznaczone jako wysokie ryzyko dodatkowych kosztów.")
+        self.lbl_filter_state.setToolTip("Podsumowanie aktywnych filtrów tabeli.")
+
+        for widget in (
+            self.lbl_visible,
+            self.lbl_scored,
+            self.lbl_shortlist,
+            self.lbl_high_risk,
+        ):
+            widget.setMinimumWidth(150)
+            summary.addWidget(widget)
+
+        summary.addStretch()
+        summary.addWidget(self.lbl_filter_state, stretch=1)
+        rl.addLayout(summary)
         rl.addWidget(self.table, stretch=3)
 
         # Log
@@ -996,20 +1298,32 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self.status.showMessage("Gotowy.")
+        self._refresh_counts()
+
+    def _apply_style(self) -> None:
+        """Przywraca natywny wygląd kontrolek i ustawia ikonę okna."""
+        icon_path = _resolve_icon_path()
+        if icon_path:
+            icon = QIcon(str(icon_path))
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+                app = QApplication.instance()
+                if app is not None:
+                    app.setWindowIcon(icon)
 
     # Skanowanie
 
     def _start(self):
         s_cfg = self.settings.get_config()
         n_cfg = self.notify.get_config()
+        llm_cfg = self.llm.get_config()
 
-        if not s_cfg.get("miasto"):
-            QMessageBox.warning(self, "Brak miasta", "Wpisz nazwe miasta.")
+        validation_error = self._validate_before_start(s_cfg, n_cfg, llm_cfg)
+        if validation_error:
+            QMessageBox.warning(self, "Nieprawidłowe ustawienia", validation_error)
             return
 
-        # Polacz konfiguracje
-        llm_cfg = self.llm.get_config()
-        config = {**s_cfg, **n_cfg, **llm_cfg, "seen_file": str(Path.home() / ".olx_scraper_seen.json")}
+        config = {**s_cfg, **n_cfg, **llm_cfg, "seen_file": str(SEEN_FILE)}
 
         self._log(f"\n--- Nowe skanowanie  {_now()} ---")
 
@@ -1033,7 +1347,7 @@ class MainWindow(QMainWindow):
     def _on_listing(self, listing: dict) -> None:
         """Sygnał z workera — nowe ogłoszenie znalezione."""
         self.model.add_listing(listing)
-        self.lbl_count.setText(f"Ogloszen w tabeli: {self.model.rowCount()}")
+        self._refresh_counts()
         self._save_seen()
 
         # Zapis do pliku jesli wlaczony
@@ -1051,6 +1365,9 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Gotowe. Nowych ogloszen: {count}")
         self._log(f"--- Koniec. Nowych: {count} ---")
         self._save_config()
+        if any(listing.get("ai_score") is not None for listing in listings):
+            self.table.sortByColumn(1, Qt.SortOrder.DescendingOrder)
+            self._log("[INFO] Posortowano tabele malejaco po ocenie AI.")
 
         # Zbiorczy e-mail po zakończeniu skanowania
         if listings:
@@ -1083,7 +1400,7 @@ class MainWindow(QMainWindow):
         )
         for row in source_rows:
             self.model.removeRow(row)
-        self.lbl_count.setText(f"Ogloszen w tabeli: {self.model.rowCount()}")
+        self._refresh_counts()
 
     def _table_context_menu(self, pos):
         if not self.table.selectionModel().selectedRows():
@@ -1095,7 +1412,23 @@ class MainWindow(QMainWindow):
 
     def _clear_table(self):
         self.model.removeRows(0, self.model.rowCount())
-        self.lbl_count.setText("Ogloszen w tabeli: 0")
+        self._refresh_counts()
+
+    def _apply_table_filters(self) -> None:
+        """Aktualizuje filtr widoku tabeli."""
+        self.proxy.set_search_text(self.filter_text.text())
+        self.proxy.set_min_ai_score(self.filter_ai_min.currentData())
+        self.proxy.set_verdict_filter(self.filter_verdict.currentData())
+        self.proxy.set_hide_unscored(self.filter_scored_only.isChecked())
+        self._refresh_counts()
+
+    def _reset_table_filters(self) -> None:
+        """Czyści wszystkie filtry widoku tabeli."""
+        self.filter_text.clear()
+        self.filter_ai_min.setCurrentIndex(0)
+        self.filter_verdict.setCurrentIndex(0)
+        self.filter_scored_only.setChecked(False)
+        self._apply_table_filters()
 
     # Pamiec seen
 
@@ -1107,27 +1440,20 @@ class MainWindow(QMainWindow):
         )
         if ans == QMessageBox.StandardButton.Yes:
             self._seen.clear()
-            (Path.home() / ".olx_scraper_seen.json").unlink(missing_ok=True)
+            SEEN_FILE.unlink(missing_ok=True)
             self._log("Pamiec wyczyszczona.")
 
     def _load_seen(self) -> None:
         """Wczytuje set widzianych ID z dysku."""
-        p = Path.home() / ".olx_scraper_seen.json"
-        if p.exists():
-            try:
-                self._seen = set(json.loads(p.read_text(encoding="utf-8")))
-            except (json.JSONDecodeError, OSError):
-                self._seen = set()
+        self._seen = engine.load_seen(str(SEEN_FILE))
+        if self._seen:
+            self._log(f"Wczytano pamiec widzianych ogloszen: {len(self._seen)}")
 
     def _save_seen(self) -> None:
         """Zapisuje set widzianych ID na dysk (thread-safe)."""
-        try:
-            p = Path.home() / ".olx_scraper_seen.json"
-            with self._seen_lock:
-                data = sorted(self._seen)
-            p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        except OSError:
-            pass
+        with self._seen_lock:
+            data = set(self._seen)
+        engine.save_seen(str(SEEN_FILE), data)
 
     # Konfiguracja
 
@@ -1139,8 +1465,8 @@ class MainWindow(QMainWindow):
                 self.settings.load(d.get("search", {}))
                 self.notify.load(d.get("notify", {}))
                 self.llm.load(d.get("llm", {}))
-            except (json.JSONDecodeError, OSError, KeyError):
-                pass
+            except (json.JSONDecodeError, OSError, KeyError) as e:
+                self._report_warning(f"Nie udało się wczytać konfiguracji GUI: {e}")
 
     def _save_config(self):
         n = self.notify.get_config()
@@ -1148,6 +1474,7 @@ class MainWindow(QMainWindow):
         smtp_save = {k: v for k, v in (n.get("smtp") or {}).items() if k != "password"}
         n_save = {**n, "smtp": smtp_save or None}
         try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
             CONFIG_FILE.write_text(
                 json.dumps({
                     "search": self.settings.get_config(),
@@ -1156,14 +1483,93 @@ class MainWindow(QMainWindow):
                 }, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        except OSError:
-            pass
+        except OSError as e:
+            self._report_warning(f"Nie udało się zapisać konfiguracji GUI: {e}")
 
     # Log
 
     def _log(self, msg: str):
         self.log.append(msg)
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def _refresh_counts(self) -> None:
+        """Odświeża liczniki tabeli i podsumowanie aktywnego widoku."""
+        total = self.model.rowCount()
+        visible = self.proxy.rowCount()
+        if visible == total:
+            self.lbl_count.setText(f"Ogloszen w tabeli: {total}")
+        else:
+            self.lbl_count.setText(f"Ogloszen w tabeli: {visible} z {total}")
+
+        visible_source_rows = [
+            self.proxy.mapToSource(self.proxy.index(row, 1)).row()
+            for row in range(visible)
+        ]
+        scored = 0
+        shortlist = 0
+        high_risk = 0
+        for row in visible_source_rows:
+            ai_index = self.model.index(row, 1)
+            ai_score = self.model.data(ai_index, Qt.ItemDataRole.UserRole)
+            ai_risk = self.model.data(ai_index, AI_RISK_ROLE)
+            if ai_score is not None:
+                scored += 1
+                if ai_score >= 80:
+                    shortlist += 1
+            if ai_risk == "high":
+                high_risk += 1
+
+        self.lbl_visible.setText(f"Widoczne: {visible}")
+        self.lbl_scored.setText(f"Z oceną AI: {scored}")
+        self.lbl_shortlist.setText(f"Mocne oferty: {shortlist}")
+        self.lbl_high_risk.setText(f"Ryzyko kosztów: {high_risk}")
+
+        active_filters: list[str] = []
+        search_text = self.filter_text.text().strip()
+        if search_text:
+            active_filters.append(f"tekst='{search_text}'")
+        ai_min = self.filter_ai_min.currentData()
+        if ai_min is not None:
+            active_filters.append(self.filter_ai_min.currentText())
+        verdict = self.filter_verdict.currentData()
+        if verdict and verdict != "all":
+            active_filters.append(f"rekomendacja: {self.filter_verdict.currentText()}")
+        if self.filter_scored_only.isChecked():
+            active_filters.append("tylko z oceną AI")
+
+        self.lbl_filter_state.setText(
+            "Aktywne filtry: " + (", ".join(active_filters) if active_filters else "brak")
+        )
+
+    def _report_warning(self, message: str) -> None:
+        """Raportuje błąd nieniszczący pracy aplikacji."""
+        logger.warning(message)
+        self._log(f"[WARN] {message}")
+        self.status.showMessage(message, 10000)
+
+    def _validate_before_start(self, s_cfg: dict, n_cfg: dict, llm_cfg: dict) -> str | None:
+        """Sprawdza podstawową spójność ustawień przed uruchomieniem skanowania."""
+        if not s_cfg.get("miasto"):
+            return "Wpisz nazwę miasta."
+        if s_cfg["cena_min"] > s_cfg["cena_max"]:
+            return "Minimalna cena nie może być większa od maksymalnej."
+        if s_cfg.get("metraz_max") is not None and (s_cfg.get("metraz_min") or 0) > s_cfg["metraz_max"]:
+            return "Minimalny metraż nie może być większy od maksymalnego."
+        if n_cfg.get("wyslij_plik") and not n_cfg.get("plik_sciezka"):
+            return "Włączono zapis do pliku, ale nie podano ścieżki."
+        if n_cfg.get("wyslij_email") and not n_cfg.get("smtp"):
+            return "Włączono e-mail, ale konfiguracja SMTP jest niepełna."
+        if (llm_cfg.get("llm_enabled") or llm_cfg.get("ai_enabled")) and llm_cfg.get("llm_provider") == "openai":
+            if not llm_cfg.get("openai_key"):
+                return "Dla OpenAI podaj klucz API."
+            if not llm_cfg.get("openai_model"):
+                return "Dla OpenAI wybierz model."
+        if (llm_cfg.get("llm_enabled") or llm_cfg.get("ai_enabled")) and llm_cfg.get("llm_provider") == "ollama":
+            if not llm_cfg.get("llm_url"):
+                return "Dla Ollamy podaj adres serwera."
+            if not llm_cfg.get("llm_model"):
+                return "Dla Ollamy wybierz model."
+        return None
 
     # Zamkniecie
 
@@ -1199,6 +1605,13 @@ def _append_to_file(listing: dict, path: str):
     elif listing.get("extra_pozycje"):
         for item in listing.get("extra_pozycje", []):
             lines.append(f"  ! {item}")
+    if listing.get("ai_score") is not None:
+        lines.append(
+            f"AI: {listing['ai_score']}/100 ({listing.get('ai_verdict', 'rozwaz')}, "
+            f"ryzyko kosztów: {listing.get('ai_hidden_cost_risk', 'medium')})"
+        )
+        if listing.get("ai_summary"):
+            lines.append(f"  > {listing['ai_summary']}")
     if listing.get("lokalizacja"):
         lines.append(f"Lokalizacja: {listing['lokalizacja']}")
     lines.append(f"URL: {listing.get('url','')}")
