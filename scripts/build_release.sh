@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist/release}"
+mkdir -p "$ROOT_DIR/build"
 WORK_ROOT="$(mktemp -d "$ROOT_DIR/build/release.XXXXXX")"
 TMP_DIST="$WORK_ROOT/dist"
 TMP_BUILD="$WORK_ROOT/build"

@@ -61,8 +61,29 @@ jobs:
         shell: bash
         run: bash scripts/build_release.sh
 
+      - name: Wgraj artefakt buildu
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/release/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobierz wszystkie artefakty
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+
       - name: Wgraj do GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/release/${{ matrix.artifact }}
+          files: |
+            dist/release/olx-monitor-macos.zip
+            dist/release/olx-monitor-linux
+            dist/release/olx-monitor-windows.exe
           generate_release_notes: true
