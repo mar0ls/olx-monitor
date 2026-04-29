@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStatusBar,
@@ -62,7 +63,7 @@ AI_RISK_ROLE = Qt.ItemDataRole.UserRole + 2
 MAX_PAGES_LIMIT = 999
 REQUEST_DELAY_PAGE = 2        # sekundy między stronami
 REQUEST_DELAY_DETAIL = 1      # sekundy między pobieraniem szczegółów
-TABS_WIDTH = 290
+TABS_WIDTH = 330
 LOG_MAX_HEIGHT = 170
 PROGRESS_BAR_HEIGHT = 14
 
@@ -914,8 +915,10 @@ class LlmPanel(QWidget):
 
         # ── Ollama ──────────────────────────────────────────────
         self.ollama_widget = QWidget()
+        self.ollama_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         of = QFormLayout(self.ollama_widget)
         of.setContentsMargins(0, 0, 0, 0)
+        of.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self.llm_url = QLineEdit("http://localhost:11434")
         self.llm_url.setPlaceholderText("http://localhost:11434")
@@ -924,10 +927,11 @@ class LlmPanel(QWidget):
         model_row = QHBoxLayout()
         self.llm_model = QComboBox()
         self.llm_model.setEditable(True)
+        self.llm_model.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.llm_model.setPlaceholderText("np. llama3, mistral, bielik")
         self.llm_model.setToolTip("Wybierz model lub wpisz nazwę ręcznie")
         self.btn_refresh = QPushButton("Odśwież")
-        self.btn_refresh.setFixedWidth(70)
+        self.btn_refresh.setMinimumWidth(90)
         self.btn_refresh.setToolTip("Pobierz listę modeli z Ollamy")
         self.btn_refresh.clicked.connect(self._refresh_models)
         model_row.addWidget(self.llm_model)
@@ -946,13 +950,15 @@ class LlmPanel(QWidget):
 
         of.addRow("URL Ollamy:", self.llm_url)
         of.addRow("Model:", model_row)
-        of.addRow(f"Timeout (max {self.llm_timeout.maximum()} s):", self.llm_timeout)
+        of.addRow("Timeout:", self.llm_timeout)
         of.addRow(self.btn_test)
 
         # ── OpenAI ──────────────────────────────────────────────
         self.openai_widget = QWidget()
+        self.openai_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         af = QFormLayout(self.openai_widget)
         af.setContentsMargins(0, 0, 0, 0)
+        af.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self.openai_key = QLineEdit()
         self.openai_key.setPlaceholderText("sk-...")
@@ -983,7 +989,7 @@ class LlmPanel(QWidget):
 
         af.addRow("Klucz API:", self.openai_key)
         af.addRow("Model:", self.openai_model)
-        af.addRow(f"Timeout (max {self.openai_timeout.maximum()} s):", self.openai_timeout)
+        af.addRow("Timeout:", self.openai_timeout)
         af.addRow(self.btn_test_openai)
 
         gf.addRow(self.chk_llm)
