@@ -1,3 +1,6 @@
+![olx logo](docs/olx.svg)
+
+
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Tests](https://github.com/mar0ls/olx-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/mar0ls/olx-monitor/actions/workflows/tests.yml)
@@ -8,133 +11,160 @@
 # OLX Monitor
 
 > **Polish apartment rental monitor for [OLX.pl](https://www.olx.pl).**  
-> Filters listings by price, area and total monthly cost (rent + extra fees), sends alerts via iMessage, e-mail or a text file. Runs as a CLI tool or a PyQt6 desktop GUI.  
-> *Documentation below is in Polish — the target audience and service are Polish-language.*
-
-
+> Filters listings by price, area and total monthly cost (rent + extra fees), sends alerts via iMessage, e-mail or a text file. Runs as a CLI tool or a PyQt6 desktop GUI.
 
 ---
 
-# OLX Monitor
+Apartment rental listing monitor for OLX.pl with notifications via iMessage, e-mail, or file output. Works in CLI (terminal) and GUI (PyQt6 desktop app) modes.
 
-Monitor ogłoszeń o wynajmie mieszkań z OLX.pl z powiadomieniami przez iMessage, e-mail lub zapis do pliku. Działa w trybie CLI (terminal) i GUI (aplikacja desktopowa PyQt6).
+## Features
 
-## Funkcje
+- Scans multiple OLX result pages with price and area filters
+- Detects additional costs (administrative fee, utilities, bills) in listing descriptions and calculates the **total monthly cost**
+- Optionally evaluates listings with AI: score 0–100, classification, short explanation, and hidden-cost risk
+- Remembers previously seen listings — skips duplicates on subsequent runs
+- Sends notifications via **iMessage/SMS** (macOS) — one alert per listing, **SMTP e-mail** — one summary after the scan, or **TXT file export**
+- Continuous monitoring mode with configurable interval (`--interval`)
+- Desktop GUI with result sorting, filtering, and a scan log
 
-- Przeszukuje wiele stron wyników OLX z filtrami ceny i metrażu
-- Wykrywa dodatkowe koszty (czynsz administracyjny, media, rachunki) w opisie ogłoszenia i liczy **łączny koszt miesięczny**
-- Opcjonalnie ocenia ogłoszenia przez AI: wynik 0-100, klasyfikacja, krótkie uzasadnienie i ryzyko ukrytych kosztów
-- Zapamiętuje już widziane ogłoszenia — przy kolejnym uruchomieniu pomija duplikaty
-- Powiadamia przez **iMessage/SMS** (macOS) — osobny alert na każde ogłoszenie, **e-mail SMTP** — jeden zbiorczy po zakończeniu skanowania, lub **zapis do pliku TXT**
-- Tryb ciągły z konfigurowalnym interwałem (`--interval`)
-- Graficzny interfejs użytkownika z sortowaniem wyników, filtrowaniem i logiem skanowania
-
-## Wymagania
+## Requirements
 
 - Python 3.11+
-- macOS (iMessage), lub dowolny system (e-mail / plik)
+- macOS (for iMessage), or any OS (for e-mail / file output)
 
-## Instalacja
+## Installation
 
 ```bash
-# Sklonuj repozytorium
+# Clone the repository
 git clone https://github.com/mar0ls/olx-monitor.git
 cd olx-monitor
 
-# Utwórz i aktywuj środowisko wirtualne
+# Create and activate a virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# Zainstaluj zależności
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Użycie
+## Usage
 
 ### CLI (terminal)
 
-Przed uruchomieniem ustaw parametry wyszukiwania w sekcji `CONFIG` na początku [olx_scraper.py](olx_scraper.py):
+Before running, set your search parameters in the `CONFIG` section at the top of [olx_scraper.py](olx_scraper.py):
 
 ```python
 CONFIG = {
-    "miasto":         "warszawa",   # lub "krakow", "wroclaw", "gdansk" itd.
-    "district_id":    373,          # opcjonalnie: ID dzielnicy (None = całe miasto)
-    "cena_min":       2000,         # PLN/miesiąc
+    "miasto":         "warszawa",   # or "krakow", "wroclaw", "gdansk", etc.
+    "district_id":    373,          # optional: district ID (None = whole city)
+    "cena_min":       2000,         # PLN/month
     "cena_max":       4500,
     "metraz_min":     35,           # m²
     "metraz_max":     70,
-    "budzet_lacznie": 5000,         # max łączny koszt (None = wyłączone)
-    "max_stron":      3,            # lub "all"
+    "budzet_lacznie": 5000,         # max total cost (None = disabled)
+    "max_stron":      3,            # or "all"
     "imessage_numer": "+48600000000",
     "wyslij_imessage": True,
-    # "seen_file":     "/pelna/sciezka/do/.olx_scraper_seen.json",  # opcjonalnie
+    # "seen_file":     "/full/path/to/.olx_scraper_seen.json",  # optional
 }
 ```
 
-Jeśli nie ustawisz `seen_file`, aplikacja domyślnie użyje wspólnego pliku:
-`~/.olx_scraper_seen.json`.
+If `seen_file` is not set, the app defaults to a shared file at `~/.olx_scraper_seen.json`.
 
-Zamiast numeru `district_id` można wpisać nazwę dzielnicy jako `"dzielnica": "mokotow"` — scraper zamieni ją na odpowiedni ID automatycznie.
+Instead of a numeric `district_id` you can use a district name via `"dzielnica": "mokotow"` — the scraper resolves it to the correct ID automatically.
 
 ```bash
-# Jednorazowe skanowanie
+# One-time scan
 python olx_scraper.py
 
-# Skanowanie co 6 godzin
+# Scan every 6 hours
 python olx_scraper.py --interval 21600
 
-# Wyczyść pamięć (zacznij od nowa)
+# Clear memory (start fresh)
 python olx_scraper.py --reset
 
-# Szczegółowe logi (debug)
+# Verbose output (debug)
 python olx_scraper.py --debug
 ```
 
-### GUI (aplikacja desktopowa)
+### GUI (desktop app)
 
 ```bash
 python olx_gui.py
 ```
 
-Okno podzielone na dwie części:
-- **Lewa strona** – zakładki: *Ustawienia* (miasto, cena, metraż), *Powiadomienia* (iMessage, e-mail, plik), *LLM* (Ollama lub OpenAI API)
-- **Prawa strona** – tabela wyników z sortowaniem, kolumną **AI**, szybkimi filtrami i logiem skanowania
+The window is split into two panels:
+- **Left panel** — tabs: *Settings* (city, price, area), *Notifications* (iMessage, e-mail, file), *LLM* (Ollama or OpenAI API)
+- **Right panel** — results table with sorting, an **AI** column, quick filters, and a scan log
 
-Podwójne kliknięcie w wiersz tabeli otwiera ogłoszenie w przeglądarce.  
-Wybrany wiersz (lub kilka) można usunąć klawiszem **Delete** albo przez **prawy przycisk myszy → Usuń zaznaczone wiersze**.
+Double-clicking a row opens the listing in a browser.  
+Selected rows can be removed with the **Delete** key or via **right-click → Remove selected rows**.
 
-Kolumna **AI** pokazuje ocenę 0-100. Po najechaniu kursorem widać krótkie uzasadnienie, plusy, ryzyka i poziom ryzyka ukrytych kosztów.
-Nad tabelą dostępne są szybkie filtry: wyszukiwanie tekstowe, minimalny próg AI, werdykt modelu i opcja pokazywania tylko ocenionych ogłoszeń.
-Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłoszeń, liczba ocenionych, shortlista (`AI >= 80`) i liczba ofert z wysokim ryzykiem kosztów.
+The **AI** column shows a score from 0–100. Hovering shows a short explanation, pros, risks, and hidden-cost risk level.  
+Quick filters above the table include text search, minimum AI threshold, model verdict, and a toggle to show only scored listings.  
+Below the filters a summary bar shows the number of listings, scored count, shortlist (`AI >= 80`), and high-cost-risk count.
 
-![Widok aplikacji v1.0.0](assets/view.png)
+![App view v1.0.0](docs/view.png)
 
-![Widok aplikacji v1.0.3](assets/view_new.png)
+![App view v1.0.3](docs/view_new.png)
 
-**Kolorowanie wierszy:**
+**Row highlighting:**
 
-| Kolor | Znaczenie | Tooltip po najechaniu |
-|-------|-----------|----------------------|
-| Żółty | Wykryto dodatkowe opłaty w opisie (czynsz administracyjny, media itp.) — kolumna *Łącznie* pokazuje sumę | Szczegóły: jakie opłaty i po ile |
-| Pomarańczowy | Ogłoszenie pochodzi z **otodom.pl** — parser nie zwrócił danych (brak opisu i czynszu), rzeczywisty koszt nieznany | Wyjaśnienie, dlaczego weryfikacja nie była możliwa |
-| Niebieski | Ogłoszenie z OLX ma sygnały kosztowe wymagające ostrożności: brak jednoznacznych kwot albo koszty zależne od zużycia | Konkretne sygnały z opisu i sugestia dalszej weryfikacji |
-| Brak koloru | Cena kompletna lub opłaty wliczone w cenę | — |
+| Color | Meaning | Tooltip on hover |
+|-------|---------|-----------------|
+| Yellow | Additional fees detected in the description (admin fee, utilities, etc.) — the *Total* column shows the sum | Details: which fees and amounts |
+| Orange | Listing is from **otodom.pl** — parser returned no data (no description or rent), actual cost unknown | Explanation of why verification was not possible |
+| Blue | OLX listing has cost signals requiring caution: no concrete amounts or usage-dependent costs | Specific signals from the description and a suggestion to verify further |
+| No color | Price is complete or fees are included | — |
 
-> Najedź kursorem myszy na dowolny podświetlony wiersz, aby zobaczyć szczegółowe wyjaśnienie.
+> Hover over any highlighted row to see a detailed explanation.
 
-### Przykład powiadomień e-mail
+### Docker
 
-![Widok wysłanych wiadomości](assets/mail.png)
+Copy the example env file and edit as needed, then use `make` to manage the container:
 
-## Obsługiwane miasta i dzielnice
+```bash
+cp docker/.env.example .env
+# edit .env: set SCAN_INTERVAL, OLLAMA_URL, etc.
+```
 
-Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (kwiecień 2026).
-W GUI dzielnica wybierana jest z listy rozwijanej wypełnianej automatycznie po wpisaniu miasta.
-Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toruń, Kielce, Opole, Olsztyn, Zielona Góra) scraper przeszukuje całe miasto.
+```bash
+make build          # build the Docker image
+make up             # start in the background (auto-restart on reboot)
+make logs           # follow live logs
+make run            # single scan and exit (no loop)
+make rerun          # rebuild image and restart the container
+make shell          # open a bash shell inside the container
+make down           # stop and remove the container (keeps data volume)
+make clean          # stop and remove everything including the seen-listings volume
+```
 
-| Miasto | Klucz URL | Liczba dzielnic |
-|--------|-----------|----------------|
-| Warszawa | `warszawa` | 18 |
+To override the scan interval without editing `.env`:
+
+```bash
+SCAN_INTERVAL=3600 docker compose up -d scraper   # scan every hour
+```
+
+To start the optional Ollama sidecar alongside the scraper:
+
+```bash
+make up-ollama      # starts scraper + ollama
+make down-ollama    # stops both
+```
+
+### E-mail notification example
+
+![Sent messages view](docs/mail.png)
+
+## Supported cities and districts
+
+The scraper has a built-in `district_id` map for 12 Polish cities (April 2026).  
+In the GUI, districts are selected from a dropdown that populates automatically when you type a city name.  
+Cities without district filters on OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toruń, Kielce, Opole, Olsztyn, Zielona Góra) are scanned as a whole.
+
+| City | URL key | Districts |
+|------|---------|-----------|
+| Warsaw | `warszawa` | 18 |
 | Kraków | `krakow` | 18 |
 | Wrocław | `wroclaw` | 6 |
 | Poznań | `poznan` | 28 |
@@ -147,10 +177,10 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 | Białystok | `bialystok` | 28 |
 | Częstochowa | `czestochowa` | 19 |
 
-### Przykłady district_id (Warszawa)
+### district_id examples (Warsaw)
 
-| Dzielnica | district_id |
-|-----------|------------|
+| District | district_id |
+|----------|------------|
 | Ursynów | 373 |
 | Mokotów | 353 |
 | Śródmieście | 351 |
@@ -161,277 +191,291 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 | Bemowo | 367 |
 | Białołęka | 365 |
 
-Aby znaleźć ID dzielnicy dla innego miasta ręcznie: otwórz OLX, wybierz dzielnicę w filtrach i skopiuj wartość parametru `search[district_id]` z URL.
+To find a district ID manually: open OLX, select a district in the filters, and copy the `search[district_id]` parameter value from the URL.
 
-## LLM i ocena AI
+## LLM and AI evaluation
 
-W zakładce **LLM** można:
+In the **LLM** tab you can:
 
-- przełączyć analizę kosztów z wyrażeń regularnych na model językowy,
-- włączyć **ocenę AI ogłoszeń** z wynikiem 0-100,
-- podać własne **priorytety najemcy** (np. *balkon, metro, cicha okolica*), które model uwzględni przy scoringu.
+- switch cost analysis from regex to a language model,
+- enable **AI listing scoring** with a 0–100 result,
+- provide your own **tenant priorities** (e.g. *balcony, metro nearby, quiet area*) that the model will factor into scoring.
 
-Do wyboru są dwa dostawcy: lokalny **Ollama** lub **OpenAI API**.
+Two providers are available: local **Ollama** or **OpenAI API**.
 
-### Konfiguracja
+### Configuration
 
-| Pole | Opis |
-|------|------|
-| Checkbox "Używaj LLM..." | Włącza LLM do analizy kosztów zamiast regex |
-| Checkbox "Oceniaj ogłoszenia przez AI" | Dodaje ocenę 0-100 i krótkie uzasadnienie do każdego ogłoszenia |
-| Priorytety | Opcjonalny opis tego, na czym zależy Ci najbardziej |
-| Dostawca | **Ollama (lokalny)** lub **OpenAI API** |
-| URL Ollamy | Adres serwera Ollamy, domyślnie `http://localhost:11434` |
-| Model (Ollama) | Wybierz z listy (przycisk "Odśwież") lub wpisz ręcznie |
-| Klucz API (OpenAI) | Klucz z [platform.openai.com](https://platform.openai.com) |
-| Model (OpenAI) | Domyślnie: `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4o` |
-| Test połączenia | Sprawdza połączenie z wybranym dostawcą |
+| Field | Description |
+|-------|-------------|
+| "Use LLM..." checkbox | Enables LLM for cost analysis instead of regex |
+| "Score listings with AI" checkbox | Adds a 0–100 score and short explanation to each listing |
+| Priorities | Optional description of what matters most to you |
+| Provider | **Ollama (local)** or **OpenAI API** |
+| Ollama URL | Ollama server address, default `http://localhost:11434` |
+| Model (Ollama) | Pick from the list (Refresh button) or type manually |
+| API Key (OpenAI) | Key from [platform.openai.com](https://platform.openai.com) |
+| Model (OpenAI) | Default: `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-4o` |
+| Test connection | Verifies connectivity to the selected provider |
 
-### Ollama (lokalny, bez kosztów)
+### Ollama (local, free)
 
 ```bash
-# Zainstaluj Ollamę (macOS)
+# Install Ollama (macOS)
 brew install ollama
 
-# Uruchom serwer
+# Start the server
 ollama serve
 
-# Pobierz model (wybierz jeden)
+# Pull a model (pick one)
 ollama pull llama3
 ollama pull mistral
 ollama pull SpeakLeash/bielik-11b-v3.0-instruct:Q5_K_M
 ```
 
-### Co robi ocena AI?
+### What does AI scoring do?
 
-Model ocenia m.in.:
+The model evaluates, among other things:
 
-- relację **cena / metraż**,
-- kompletność i wiarygodność opisu,
-- ryzyko **ukrytych kosztów**,
-- czerwone flagi typu brak konkretów, niepełne koszty, zbyt lakoniczny opis,
-- zgodność z Twoimi priorytetami.
+- **price / area** ratio,
+- completeness and credibility of the description,
+- **hidden-cost** risk,
+- red flags such as vague descriptions, incomplete costs, or overly brief text,
+- match with your stated priorities.
 
-Ocena AI nie zastępuje twardych filtrów. Ma pomóc szybciej ustalić, które oferty warto sprawdzić najpierw.
+AI scoring supplements hard filters — it helps you decide which listings to check first.
 
 ### OpenAI API
 
-Podaj klucz API w polu **Klucz API**. Domyślny model `gpt-4o-mini` zwykle wystarcza do analizy kosztów i scoringu ogłoszeń.
+Enter your API key in the **API Key** field. The default model `gpt-4o-mini` is usually sufficient for cost analysis and listing scoring.
 
-### Zalety i ograniczenia
+### Comparison
 
 | | Regex | Ollama | OpenAI API |
 |-|-------|--------|------------|
-| Szybkość | < 0.1s/ogłoszenie | 1–5s/ogłoszenie | 0.5–2s/ogłoszenie |
-| Standardowe formaty | ✅ | ✅ | ✅ |
-| Niestandardowe opisy | ❌ | ✅ | ✅ |
-| Działa bez internetu | ✅ | ✅ | ❌ |
-| Koszt | bezpłatny | bezpłatny | płatny (ułamki gr/ogłoszenie) |
-| Wymaga konfiguracji | ❌ | Ollama | Klucz API |
+| Speed | < 0.1s/listing | 1–5s/listing | 0.5–2s/listing |
+| Standard formats | ✅ | ✅ | ✅ |
+| Non-standard descriptions | ❌ | ✅ | ✅ |
+| Works offline | ✅ | ✅ | ❌ |
+| Cost | free | free | paid (fractions of a cent/listing) |
+| Requires setup | ❌ | Ollama | API key |
 
-Ogłoszenia z **otodom.pl** są zawsze analizowane osobnym parserem (`otodom_scraper.py`), który odczytuje dane z JSON-a wbudowanego w stronę Next.js — niezależnie od ustawienia LLM.
+Listings from **otodom.pl** are always parsed by a dedicated parser (`otodom_scraper.py`) that reads data from the Next.js `__NEXT_DATA__` JSON embedded in the page — regardless of the LLM setting.
 
-Jeśli wybrany LLM jest niedostępny podczas skanowania, program automatycznie wraca do regex bez przerywania pracy.
+If the selected LLM is unavailable during a scan, the app automatically falls back to regex without interrupting the run.
 
-## Jak działa analiza dodatkowych kosztów (regex)
+## How extra-cost analysis works (regex)
 
-Gdy włączony jest filtr **budżetu łącznego**, scraper dla każdego ogłoszenia spełniającego ceny:
+When the **total budget** filter is enabled, the scraper processes each listing that passes price filters:
 
-1. Pobiera stronę ogłoszenia i wyciąga opis
-2. Sprawdza, czy opis zawiera frazy typu *"wszystko w cenie"*, *"media wliczone"* → jeśli tak, extra = 0 zł
-3. W przeciwnym razie szuka kwot przy słowach kluczowych: *czynsz administracyjny*, *media*, *rachunki*, *c.o.*, *opłaty eksploatacyjne* itd.
-4. Dla zakresów (np. *"rachunki 200–400 zł"*) przyjmuje pesymistycznie wyższą wartość
-5. Odrzuca ogłoszenie jeśli `cena + extra > budzet_lacznie`
+1. Fetches the listing page and extracts the description
+2. Checks for phrases like *"all inclusive"*, *"utilities included"* → if found, extra = 0 PLN
+3. Otherwise searches for amounts next to keywords: *administrative fee*, *utilities*, *bills*, *central heating*, *service charges*, etc.
+4. For ranges (e.g. *"bills 200–400 PLN"*) the higher value is used pessimistically
+5. Rejects the listing if `price + extra > total_budget`
 
-## Struktura projektu
+## Project structure
 
 ```
-olx_scraper.py      – silnik monitora (logika, parsowanie, powiadomienia)
-otodom_scraper.py   – parser ogłoszeń otodom.pl (Next.js __NEXT_DATA__)
-olx_gui.py          – interfejs graficzny PyQt6
-miner_id.py         – narzędzie do podglądu district_id dla wybranego miasta
-test_olx_scraper.py – testy jednostkowe (pytest)
-requirements.txt    – zależności Python
-.gitignore          – pliki wykluczone z repozytorium
+olx_scraper.py        – monitor engine (logic, parsing, notifications)
+otodom_scraper.py     – otodom.pl listing parser (Next.js __NEXT_DATA__)
+olx_gui.py            – PyQt6 graphical interface
+miner_id.py           – tool for browsing district_id values for a city
+update_districts.py   – verifies and updates the district_id map against OLX
+test_olx_scraper.py   – unit tests (pytest)
+requirements.txt      – Python dependencies
+requirements-dev.txt  – dev dependencies (pytest, ruff)
+pyproject.toml        – project and tooling configuration
+.gitignore            – files excluded from the repository
 ```
 
-## Uruchomienie testów i lintu
+## Running tests and linting
 
 ```bash
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
-
-pytest -q
-ruff check .
 ```
 
-## Lokalna kompilacja
+```bash
+pytest -q                                         # run all tests (quiet)
+pytest -v                                         # verbose — shows each test name
+pytest test_olx_scraper.py::test_parse_price -v  # run one specific test
+pytest -k "extra_costs" -v                        # run tests whose name contains "extra_costs"
+pytest -s                                         # show print output during tests
+pytest --tb=short                                 # shorter traceback on failure
+```
 
-Projekt ma dwa tryby budowania:
+```bash
+ruff check .          # lint the whole project
+ruff check . --fix    # auto-fix fixable issues
+```
 
-1. build developerski przez `spec`, przydatny do lokalnego testowania bundla `.app` na macOS,
-2. build release-like, który tworzy pojedynczy artefakt do dystrybucji.
+## Building locally
 
-### Build developerski
+The project supports two build modes:
+
+1. Developer build via `spec` — useful for local testing of the `.app` bundle on macOS.
+2. Release build — produces a single distributable artifact.
+
+### Developer build
 
 ```bash
 venv/bin/pyinstaller olx-monitor.spec --noconfirm
 ```
 
-Artefakty pojawią się w katalogu `dist/`:
+Artifacts appear in `dist/`:
 
-- `dist/olx-monitor` — katalog pomocniczy `PyInstaller` w trybie `onedir`
-- `dist/olx-monitor.app` — pakiet `.app` dla macOS
+- `dist/olx-monitor` — PyInstaller `onedir` helper directory
+- `dist/olx-monitor.app` — `.app` bundle for macOS
 
-Ten tryb jest wygodny do debugowania lokalnego bundla, ale nie jest najlepszy do publikacji, bo zostawia pełny katalog roboczy.
+This mode is convenient for debugging the local bundle but is not ideal for distribution since it leaves a full working directory behind.
 
-### Build release-like
+### Release build
 
 ```bash
 bash scripts/build_release.sh
 ```
 
-Gotowy artefakt pojawi się w `dist/release/`:
+The finished artifact appears in `dist/release/`:
 
 - macOS: `dist/release/olx-monitor-macos.zip`
 - Linux: `dist/release/olx-monitor-linux`
 - Windows: `dist/release/olx-monitor-windows.exe`
 
-Na macOS skrypt pakuje gotowe `olx-monitor.app` do pojedynczego archiwum ZIP, więc lokalny wynik wygląda tak samo jak artefakt do publikacji.
+On macOS the script packages the finished `olx-monitor.app` into a single ZIP archive, so the local result looks identical to the published artifact.
 
-Testy pokrywają:
+### Test coverage
 
-| Moduł | Co testuje |
-|-------|-----------|
-| `build_url` | budowanie URL, filtr district_id, rozpoznawanie nazwy dzielnicy |
-| `get_districts_for_city` | mapa dzielnic, normalizacja polskich znaków |
-| `parse_price` | parsowanie cen (zł, PLN, różne formaty) |
-| `parse_metraz` | parsowanie metrażu (m², m2, przecinki) |
-| `parse_listings` | parsowanie kart ogłoszeń z HTML |
-| `extract_extra_costs` | wykrywanie i sumowanie dodatkowych kosztów |
-| `has_next_page` | wykrywanie paginacji |
-| `load_seen` / `save_seen` | trwałość danych (JSON) |
-| `format_imessage` | formatowanie powiadomień |
-| `fetch_page` / `fetch_detail` | pobieranie stron (mock HTTP) |
-| `extract_extra_costs_llm` | analiza kosztów przez LLM (mock Ollama) |
-| `extract_extra_costs_openai` | analiza kosztów przez OpenAI API (mock HTTP) |
-| `analyze_listing_with_ai` | scoring AI ogłoszeń i normalizacja odpowiedzi modelu |
-| `fetch_ollama_models` | pobieranie listy modeli Ollamy (mock HTTP) |
-| `otodom_scraper` | parsowanie __NEXT_DATA__ z otodom.pl (mock HTTP) |
+| Module | What it tests |
+|--------|--------------|
+| `build_url` | URL construction, district_id filter, district name resolution |
+| `get_districts_for_city` | district map, Polish character normalization |
+| `parse_price` | price parsing (PLN, various formats) |
+| `parse_metraz` | area parsing (m², m2, commas) |
+| `parse_listings` | listing card parsing from HTML |
+| `extract_extra_costs` | detection and summation of additional costs |
+| `has_next_page` | pagination detection |
+| `load_seen` / `save_seen` | data persistence (JSON) |
+| `format_imessage` | notification formatting |
+| `fetch_page` / `fetch_detail` | page fetching (mock HTTP) |
+| `extract_extra_costs_llm` | cost analysis via LLM (mock Ollama) |
+| `extract_extra_costs_openai` | cost analysis via OpenAI API (mock HTTP) |
+| `analyze_listing_with_ai` | AI listing scoring and model response normalization |
+| `fetch_ollama_models` | Ollama model list fetching (mock HTTP) |
+| `otodom_scraper` | `__NEXT_DATA__` parsing from otodom.pl (mock HTTP) |
 
-## Trwałość danych i bezpieczeństwo
+## Data persistence and security
 
-- Numer telefonu i treść wiadomości są escapowane przed wstawieniem do skryptu AppleScript (ochrona przed injection)
-- Hasło SMTP nie jest zapisywane do pliku konfiguracyjnego
-- CLI i GUI współdzielą jeden plik pamięci widzianych ogłoszeń: `.olx_scraper_seen.json`
-- Pliki `.olx_scraper_seen.json` i `.olx_scraper_gui.json` są wykluczone z gita (`.gitignore`)
+- Phone number and message content are escaped before insertion into the AppleScript (injection protection)
+- SMTP password is not saved to the config file
+- CLI and GUI share one seen-listings memory file: `.olx_scraper_seen.json`
+- `.olx_scraper_seen.json` and `.olx_scraper_gui.json` are excluded from git (`.gitignore`)
 
-## Konfiguracja e-mail (SMTP)
+## E-mail configuration (SMTP)
 
 ### Gmail
 
-Od maja 2022 Gmail **nie pozwala logować się przez SMTP zwykłym hasłem konta** — wymagane jest **Hasło aplikacji** (App Password).
+Since May 2022 Gmail **does not allow SMTP login with a regular account password** — an **App Password** is required.
 
-**Warunek:** konto Google musi mieć włączoną weryfikację dwuetapową (2FA).
+**Prerequisite:** the Google account must have two-factor authentication (2FA) enabled.
 
-1. Przejdź na stronę [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-2. Wybierz aplikację: **Poczta**, urządzenie: **Komputer Mac** (lub dowolne)
-3. Kliknij **Generuj** → skopiuj wyświetlone 16-znakowe hasło (np. `abcd efgh ijkl mnop`)
-4. Wpisz to hasło (bez spacji) w polu **Hasło** w zakładce *Powiadomienia → E-mail (SMTP)*
+1. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+2. Select app: **Mail**, device: **Mac** (or any)
+3. Click **Generate** → copy the displayed 16-character password (e.g. `abcd efgh ijkl mnop`)
+4. Enter this password (without spaces) in the **Password** field under *Notifications → E-mail (SMTP)*
 
-> **Jeśli pojawia się komunikat „The setting you are looking for is not available for your account":**  
-> Konto jest kontem Google Workspace (firmowym/szkolnym) — administrator domeny wyłączył hasła aplikacji.  
-> Użyj jednej z alternatyw poniżej.
+> **If you see "The setting you are looking for is not available for your account":**  
+> The account is a Google Workspace account (business/school) — the domain administrator has disabled App Passwords.  
+> Use one of the alternatives below.
 
-### Outlook / Hotmail (zalecana alternatywa)
+### Outlook / Hotmail (recommended alternative)
 
-Konta Microsoft (`@outlook.com`, `@hotmail.com`) obsługują SMTP zwykłym hasłem bez dodatkowej konfiguracji.
+Microsoft accounts (`@outlook.com`, `@hotmail.com`) support SMTP with a regular password and require no extra setup.
 
-| Pole | Wartość |
-|------|---------|
-| Serwer | `smtp-mail.outlook.com` |
+| Field | Value |
+|-------|-------|
+| Server | `smtp-mail.outlook.com` |
 | Port | `587` |
-| Login | `twój@outlook.com` |
-| Hasło | zwykłe hasło konta Microsoft |
-| Do | adres odbiorcy powiadomień |
+| Login | `your@outlook.com` |
+| Password | your regular Microsoft account password |
+| To | notification recipient address |
 
-### Interia / pacz.to / op.pl i inne serwisy Grupy Interia
+### Interia / pacz.to / op.pl and other Interia Group services
 
-Interia **domyślnie blokuje dostęp SMTP** z zewnętrznych programów. Przed pierwszym użyciem należy to ręcznie włączyć:
+Interia **blocks external SMTP access by default**. You must enable it manually before first use:
 
-1. Zaloguj się przez webmail: [poczta.interia.pl](https://poczta.interia.pl)
-2. Kliknij ikonę **lub menu ⚙ Ustawienia**
-3. Przejdź do **Ustawienia konta → Główne ustawienia → Parametry → Programy pocztowe** ( *Dostęp przez zewnętrzne programy*)
-4. Włącz opcję **„Korzystam z programu do obsługi poczty”** i zapisz
+1. Log in via webmail: [poczta.interia.pl](https://poczta.interia.pl)
+2. Click the **⚙ Settings** icon or menu
+3. Go to **Account settings → General settings → Parameters → Mail clients** (*External program access*)
+4. Enable **"I use a mail client"** and save
 
-Po włączeniu wpisz w GUI:
+Then enter in the GUI:
 
-| Pole | Wartość |
-|------|----------|
-| Serwer | `poczta.interia.pl` |
+| Field | Value |
+|-------|-------|
+| Server | `poczta.interia.pl` |
 | Port | `587` |
-| Login | pełny adres e-mail (np. `bot@pacz.to`) |
-| Hasło | zwykłe hasło konta |
-| Do | adres odbiorcy powiadomień |
+| Login | full e-mail address (e.g. `bot@pacz.to`) |
+| Password | your regular account password |
+| To | notification recipient address |
 
-> Ta sama procedura dotyczy kont `@interia.pl`, `@interia.eu`, `@poczta.fm`, `@op.pl`, `@vp.pl`, `@pacz.to` i innych domen Grupy Interia.
+> The same procedure applies to `@interia.pl`, `@interia.eu`, `@poczta.fm`, `@op.pl`, `@vp.pl`, `@pacz.to`, and other Interia Group domains.
 
-### Przegląd dostawców SMTP
+### SMTP provider overview
 
-| Dostawca | Serwer | Port | Hasło | Wymaga aktywacji |
-|----------|--------|------|-------|------------------|
-| Gmail | `smtp.gmail.com` | `587` | hasło aplikacji (App Password) | 2FA + App Password |
-| Outlook/Hotmail | `smtp-mail.outlook.com` | `587` | zwykłe hasło konta | nie |
-| Interia i pochodne | `poczta.interia.pl` | `587` | zwykłe hasło konta | **tak** – patrz sekcja wyżej |
-| iCloud | `smtp.mail.me.com` | `587` | hasło aplikacji z [appleid.apple.com](https://appleid.apple.com) | App Password |
-| Własny hosting | wg. dostawcy | `587` / `465` | wg. dostawcy | wg. dostawcy |
+| Provider | Server | Port | Password | Requires setup |
+|----------|--------|------|----------|----------------|
+| Gmail | `smtp.gmail.com` | `587` | App Password | 2FA + App Password |
+| Outlook/Hotmail | `smtp-mail.outlook.com` | `587` | regular account password | no |
+| Interia and variants | `poczta.interia.pl` | `587` | regular account password | **yes** — see section above |
+| iCloud | `smtp.mail.me.com` | `587` | App Password from [appleid.apple.com](https://appleid.apple.com) | App Password |
+| Custom hosting | per provider | `587` / `465` | per provider | per provider |
 
-> **Port 465** = SSL/TLS — niektóre serwery hostingowe  
-> **Port 587** = STARTTLS — Gmail, Outlook, Interia i większość dostawców  
-> Aplikacja wykrywa tryb połączenia automatycznie na podstawie numeru portu.
+> **Port 465** = SSL/TLS — some hosting servers  
+> **Port 587** = STARTTLS — Gmail, Outlook, Interia, and most providers  
+> The app detects the connection mode automatically based on the port number.
 
-## Uruchamianie skompilowanej wersji
+## Running compiled releases
 
-Pobierz plik wykonywalny ze strony [Releases](../../releases) dla swojego systemu:
+Download the executable from the [Releases](../../releases) page for your OS:
 
-| System | Plik |
-|--------|------|
+| OS | File |
+|----|------|
 | macOS | `olx-monitor-macos.zip` |
 | Linux | `olx-monitor-linux` |
 | Windows | `olx-monitor-windows.exe` |
 
-> Po pobraniu wersji dla macOS rozpakuj archiwum i uruchom `olx-monitor.app`.
+> On macOS, unzip the archive and launch `olx-monitor.app`.
 >
-> **Pierwsze uruchomienie trwa kilka sekund dłużej** głównie przy buildach jednoplikowych dla Linux i Windows, bo aplikacja rozpakowuje się do katalogu tymczasowego. Kolejne starty są szybsze dopóki katalog tymczasowy nie zostanie wyczyszczony.
+> **The first launch takes a few extra seconds**, especially for single-file builds on Linux and Windows, because the app extracts itself to a temporary directory. Subsequent starts are faster as long as the temp directory is not cleared.
 
-Na macOS może pojawić się ostrzeżenie o nieznanym deweloperze — przejdź do *Preferencje systemowe → Prywatność i bezpieczeństwo* i kliknij **Otwórz mimo to**.
+On macOS an "unknown developer" warning may appear — go to *System Preferences → Privacy & Security* and click **Open Anyway**.
 
-## Znane ograniczenia
+## Known limitations
 
-- OLX może zmienić strukturę HTML — w razie braku wyników sprawdź selektory w `parse_listings()` i `fetch_detail()`
-- iMessage dostępny tylko na macOS z uruchomioną aplikacją Wiadomości
-- Ogłoszenia z serwisu **Otodom** (pojawiające się w wynikach OLX) są obsługiwane przez osobny parser (`otodom_scraper.py`). Jeśli otodom nie zwróci danych (zmiana struktury strony), wiersz jest oznaczany pomarańczowo z tooltipem z wyjaśnieniem
+- OLX may change its HTML structure — if no results appear, check the selectors in `parse_listings()` and `fetch_detail()`
+- iMessage is only available on macOS with the Messages app running
+- **Otodom** listings (which appear in OLX results) are handled by a separate parser (`otodom_scraper.py`). If otodom returns no data (page structure change), the row is highlighted orange with an explanatory tooltip
 
-## E-mail na Linux i Windows
+## E-mail on Linux and Windows
 
-Mechanizm e-mail (`smtplib`) korzysta wyłącznie ze standardowej biblioteki Pythona i **działa identycznie na macOS, Linux i Windows** — nie wymaga żadnych dodatkowych zależności systemowych. Jedyna funkcja specyficzna dla macOS to iMessage (AppleScript) — na Linux/Windows po prostu się nie uruchomi (bez błędu krytycznego).
+The e-mail mechanism (`smtplib`) uses only the Python standard library and **works identically on macOS, Linux, and Windows** — no additional system dependencies are required. The only macOS-specific feature is iMessage (AppleScript) — on Linux/Windows it simply does not run (no critical error).
 
-## Zgodność z regulaminem OLX
+## Compliance with OLX terms of service
 
-Scraper pobiera **publiczne strony wyników wyszukiwania** (takie same jak te, które widzi przeglądarka).  
-Zachowuje rozsądne opóźnienia między żądaniami (2 s między stronami, 1 s między ogłoszeniami).
+The scraper fetches **public search result pages** (the same pages a browser sees).  
+It respects reasonable delays between requests (2 s between pages, 1 s between listings).
 
-Plik [`robots.txt`](https://www.olx.pl/robots.txt) OLX **nie blokuje** ścieżek wyników wyszukiwania — `Allow: /` obejmuje strony listingów.  
-Blokowane są jedynie: `/api/` (z wyjątkami), panele administracyjne, formularze kontaktowe i drukowanie.
+OLX's [`robots.txt`](https://www.olx.pl/robots.txt) **does not block** search result paths — `Allow: /` covers listing pages.  
+Only blocked paths are: `/api/` (with exceptions), admin panels, contact forms, and print views.
 
-> **Uwaga:** Scraper jest narzędziem do **osobistego monitorowania ogłoszeń** z częstotliwością porównywalną do ręcznego przeglądania. Nie jest przeznaczony do masowego pobierania danych, tworzenia konkurencyjnych serwisów ani agregacji ogłoszeń. Używaj odpowiedzialnie i z poszanowaniem infrastruktury OLX.
+> **Note:** The scraper is a tool for **personal listing monitoring** at a frequency comparable to manual browsing. It is not intended for bulk data collection, building competing services, or listing aggregation. Use responsibly and with respect for OLX infrastructure.
 
-## Współpraca
+## Contributing
 
-Pull requesty są mile widziane.  
-Jeśli chcesz dodać nową funkcję lub poprawić istniejącą, przygotuj fork, branch i PR.  
-Przed wysłaniem upewnij się, że testy i lint przechodzą (`venv/bin/pytest -q` oraz `venv/bin/ruff check .`).
+Pull requests are welcome.  
+To add a new feature or improve an existing one, create a fork, branch, and PR.  
+Before submitting, make sure tests and linting pass (`venv/bin/pytest -q` and `venv/bin/ruff check .`).
 
-## Licencja
+## License
 
-Projekt udostępniony na licencji **MIT** — patrz plik [LICENSE](LICENSE).
+Released under the **MIT** license — see the [LICENSE](LICENSE) file.

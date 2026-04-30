@@ -1,0 +1,7 @@
+{
+  "domain": "www.olx.pl",
+  "listing_path": "/nieruchomosci/mieszkania/wynajem/{city}/",
+  "currency": "PLN",
+  "currency_symbols": ["zł", "zl", "pln", "zlotych", "złotych"],
+  "note": "City and district data is maintained in CITY_DISTRICT_DISPLAY inside olx_scraper.py and updated by update_districts.py"
+}

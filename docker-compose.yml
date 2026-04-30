@@ -1,0 +1,26 @@
+services:
+  scraper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: olx-monitor
+    restart: unless-stopped
+    volumes:
+      - scraper-data:/data
+    environment:
+      - SCAN_INTERVAL=${SCAN_INTERVAL:-21600}
+    command: ["--interval", "${SCAN_INTERVAL:-21600}"]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: olx-ollama
+    profiles: [ollama]
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+
+volumes:
+  scraper-data:
+  ollama-models:

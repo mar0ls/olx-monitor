@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-OLX.pl Scraper – wynajem mieszkań
-Powiadomienia: terminal + iMessage (macOS)
+OLX Apartment Rental Scraper
+Notifications: terminal + iMessage (macOS)
 
-Wymagania:
+Requirements:
     pip install requests beautifulsoup4
 
-Użycie:
-    python olx_scraper.py                     # jednorazowo
-    python olx_scraper.py --interval 86400    # raz na dobę
-    python olx_scraper.py --reset             # wyczyść pamięć i zacznij od nowa
+Usage:
+    python olx_scraper.py                     # run once
+    python olx_scraper.py --interval 86400    # run once per day
+    python olx_scraper.py --reset             # clear memory and start fresh
 """
 
 import argparse
@@ -28,11 +28,11 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# Stałe
-REQUEST_TIMEOUT = 15          # s – timeout dla requests.get()
-DELAY_BETWEEN_PAGES = 2       # s – pauza między stronami wyników
-DELAY_BETWEEN_REQUESTS = 1    # s – pauza między pobieraniem szczegółów
-MAX_PAGES_UNLIMITED = 999     # strony – wartość "all" zamieniana na tę liczbę
+# Constants
+REQUEST_TIMEOUT = 15          # s — timeout for requests.get()
+DELAY_BETWEEN_PAGES = 2       # s — pause between result pages
+DELAY_BETWEEN_REQUESTS = 1    # s — pause between detail fetches
+MAX_PAGES_UNLIMITED = 999     # pages — value used when max_pages is "all"
 DEFAULT_SEEN_FILE = Path.home() / ".olx_scraper_seen.json"
 DEFAULT_OPENAI_MODELS = ["gpt-4o-mini", "gpt-4.1-mini", "gpt-4o"]
 
@@ -56,45 +56,49 @@ class Listing(TypedDict, total=False):
     ai_source: str
 
 # ─────────────────────────────────────────────────────────────
-#  KONFIGURACJA – dostosuj do swoich potrzeb
+#  CONFIG — adjust to your needs
 # ─────────────────────────────────────────────────────────────
 CONFIG = {
-    # Miasto (tak jak w URL olx.pl, np. "warszawa", "krakow", "wroclaw")
+    # City (as used in the OLX URL, e.g. "warszawa", "krakow", "wroclaw")
     "miasto": "warszawa",
 
-    # ID dzielnicy z OLX (opcjonalnie; None = całe miasto)
-    # Skrypt zawiera gotowe mapy dla: Warszawa, Kraków, Wrocław, Poznań, Gdańsk,
+    # District ID from OLX (optional; None = whole city)
+    # Built-in maps available for: Warsaw, Kraków, Wrocław, Poznań, Gdańsk,
     # Gdynia, Sopot, Łódź, Katowice, Szczecin, Białystok, Częstochowa.
-    # Możesz też wpisać nazwę dzielnicy jako "dzielnica": "ursynow" – zostanie
-    # automatycznie zamieniona na district_id dla bieżącego miasta.
-    # Aby znaleźć ID ręcznie: otwórz OLX, wybierz dzielnicę i sprawdź
-    # parametr search[district_id] w URL.
-    "district_id": 373,  # Ursynów (Warszawa)
+    # You can also use a district name via "dzielnica": "ursynow" — it will be
+    # resolved to the correct district_id automatically.
+    # To find an ID manually: open OLX, select a district and check the
+    # search[district_id] parameter in the URL.
+    "district_id": 373,  # Ursynów (Warsaw)
 
-    # Filtry cenowe (PLN/miesiąc)
+    # Price filters (currency/month)
     "cena_min": 0,
     "cena_max": 4000,
 
-    # Metraż (m²) – filtrowane lokalnie na podstawie tytułu/opisu
+    # Area (m²) — filtered locally from title/description
     "metraz_min": 0,
     "metraz_max": 50,
 
-    # Maksymalny ŁĄCZNY koszt miesięczny (czynsz najmu + opłaty dodatkowe z opisu)
-    # Ustaw None żeby wyłączyć ten filtr
+    # Maximum TOTAL monthly cost (rent + additional fees from the description)
+    # Set to None to disable this filter
     "budzet_lacznie": 4000,
 
-    # Ile stron OLX przeszukać (każda ma ~36 ogłoszeń)
-    # Liczba całkowita lub "all" żeby przejść wszystkie strony
+    # Number of OLX result pages to scan (each has ~36 listings)
+    # Integer or "all" to scan every available page
     "max_stron": 2,
 
-    # Numer telefonu do powiadomień iMessage (+48XXXXXXXXX)
+    # Phone number for iMessage notifications (+XXXXXXXXXXX)
     "imessage_numer": "+48600000000",
 
-    # Czy wysyłać iMessage? (wymaga macOS z zalogowaną aplikacją Messages)
+    # Send iMessage? (requires macOS with the Messages app signed in)
     "wyslij_imessage": False,
 
-    # Plik do zapamiętywania już widzianych ogłoszeń
+    # File for persisting already-seen listing IDs
     "seen_file": str(DEFAULT_SEEN_FILE),
+
+    # Country code — must match a file in countries/{code}.json
+    # "pl" = OLX Poland (olx.pl), "ua" = OLX Ukraine (olx.ua)
+    "country": "pl",
 }
 # ─────────────────────────────────────────────────────────────
 
@@ -109,7 +113,7 @@ HEADERS = {
 }
 
 
-# ── Normalizacja i mapa dzielnic polskich miast ───────────────
+# ── Name normalisation and Polish city district map ──────────
 
 _POL_TRANS = str.maketrans({
     'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n',
@@ -120,28 +124,55 @@ _POL_TRANS = str.maketrans({
 
 
 def _normalize_name(s: str) -> str:
-    """Zamienia nazwę na klucz ASCII: małe litery, bez diakrytyków, spacje → myślniki."""
+    """Converts a name to an ASCII lookup key: lowercase, no diacritics, spaces → hyphens."""
     return re.sub(r"[^a-z0-9]+", "-", s.lower().translate(_POL_TRANS)).strip("-")
 
 
 def _ensure_parent_dir(path: str | Path) -> Path:
-    """Tworzy katalog nadrzędny dla pliku, jeśli jeszcze nie istnieje."""
+    """Creates the parent directory of a file if it does not yet exist."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
 
 
-def _extract_json_object(text: str) -> dict[str, Any]:
-    """
-    Wyciąga pierwszy kompletny obiekt JSON z tekstu.
+# ── Multi-country support ─────────────────────────────────────
 
-    Modele lokalne i niektóre integracje potrafią owinąć JSON dodatkowymi
-    zdaniami. Zamiast polegać na kruchym regexie, przechodzimy po tekście
-    znak po znaku i pilnujemy zagnieżdżeń nawiasów klamrowych.
+_COUNTRIES_DIR = Path(__file__).parent / "countries"
+
+
+def load_country_config(code: str) -> dict:
+    """Loads country config from countries/{code}.json.
+
+    Returns the parsed dict, or an empty dict if the file does not exist.
+    """
+    path = _COUNTRIES_DIR / f"{code}.json"
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def get_cities_for_country(country_cfg: dict) -> dict[str, str]:
+    """Returns {city_key: display_name} for cities defined in a country config.
+
+    Useful for populating UI dropdowns for non-PL countries.
+    """
+    return {
+        key: data.get("display", key)
+        for key, data in country_cfg.get("cities", {}).items()
+    }
+
+
+def _extract_json_object(text: str) -> dict[str, Any]:
+    """Extracts the first complete JSON object from text.
+
+    Local models and some integrations can wrap the JSON in extra prose.
+    Rather than relying on a fragile regex we walk the text character by character
+    and track curly-brace nesting depth.
     """
     start = text.find("{")
     if start < 0:
-        raise ValueError("Brak obiektu JSON w odpowiedzi modelu")
+        raise ValueError("No JSON object found in model response")
 
     depth = 0
     in_string = False
@@ -168,13 +199,13 @@ def _extract_json_object(text: str) -> dict[str, Any]:
             if depth == 0:
                 return json.loads(text[start:idx + 1])
 
-    raise ValueError("Niekompletny obiekt JSON w odpowiedzi modelu")
+    raise ValueError("Incomplete JSON object in model response")
 
 
-# Mapa dzielnic polskich miast woj. → district_id na OLX (kwiecień 2026)
-# Zewnętrzny klucz = slug URL miasta (bez polskich znaków).
-# Wewnętrzny klucz = polska nazwa wyświetlana (dla GUI i komunikatów).
-# Małe miasta (np. Bydgoszcz, Lublin) nie mają w OLX filtrów dzielnic.
+# District map for Polish cities → district_id on OLX (April 2026)
+# Outer key = city URL slug (ASCII, no diacritics).
+# Inner key = Polish display name (used in the GUI and log messages).
+# Smaller cities (e.g. Bydgoszcz, Lublin) have no district filters on OLX.
 CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
     "warszawa": {
         "Bemowo": 367,
@@ -411,51 +442,75 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
     },
 }
 
-# Słownik z kluczami znormalizowanymi do ASCII – generowany automatycznie
-# Służy do rozpoznawania nazw dzielnic wpisanych przez użytkownika (np. "ursynow", "Nowa Huta")
+# ASCII-normalised lookup dict — generated automatically.
+# Used to resolve district names typed by the user (e.g. "ursynow", "Nowa Huta").
 CITY_DISTRICT_IDS: dict[str, dict[str, int]] = {
     city: {_normalize_name(name): did for name, did in districts.items()}
     for city, districts in CITY_DISTRICT_DISPLAY.items()
 }
 
 
-def get_districts_for_city(miasto: str) -> dict[str, int]:
-    """Zwraca słownik {nazwa_wyświetlana: district_id} dla podanego miasta.
+def get_districts_for_city(miasto: str, country_cfg: dict | None = None) -> dict[str, int]:
+    """Returns {display_name: district_id} for a given city.
+
+    For non-PL countries, districts are read from the country config file.
+    Falls back to the built-in CITY_DISTRICT_DISPLAY for Poland.
 
     Args:
-        miasto: Nazwa miasta (np. ``'warszawa'``, ``'Kraków'``).
+        miasto: City name or URL key (e.g. ``'warszawa'``, ``'kiev'``).
+        country_cfg: Parsed country config dict (from load_country_config).
 
     Returns:
-        Słownik nazw dzielnic → district_id, posortowany alfabetycznie.
-        Pusty słownik jeśli miasto nie jest obsługiwane lub nie ma podziału na dzielnice.
+        Sorted dict of district names → IDs. Empty dict if none defined.
     """
+    if country_cfg and "cities" in country_cfg:
+        city_data = country_cfg["cities"].get(_normalize_name(miasto), {})
+        districts = city_data.get("districts", {})
+        if districts:
+            return dict(sorted(districts.items()))
     return dict(sorted(CITY_DISTRICT_DISPLAY.get(_normalize_name(miasto), {}).items()))
 
 
-# ── Budowanie URL ─────────────────────────────────────────────
+# ── URL building ─────────────────────────────────────────────
 
-def build_url(config: dict, page: int = 1) -> str:
-    """Buduje URL wyszukiwania OLX na podstawie konfiguracji i numeru strony."""
+def build_url(config: dict, page: int = 1, country_cfg: dict | None = None) -> str:
+    """Builds an OLX search URL from config, page number, and optional country config."""
     miasto = config["miasto"].lower()
 
+    if country_cfg:
+        domain = country_cfg["domain"]
+        listing_path = country_cfg["listing_path"].format(city=miasto)
+        base = f"https://{domain}{listing_path}"
+    else:
+        base = f"https://www.olx.pl/nieruchomosci/mieszkania/wynajem/{miasto}/"
+
     url = (
-        f"https://www.olx.pl/nieruchomosci/mieszkania/wynajem/{miasto}/"
+        f"{base}"
         f"?search%5Bfilter_float_price%3Afrom%5D={config['cena_min']}"
         f"&search%5Bfilter_float_price%3Ato%5D={config['cena_max']}"
         f"&search%5Bfilter_float_m%3Afrom%5D={config.get('metraz_min', 0) or 0}"
         f"&search%5Bfilter_float_m%3Ato%5D={config.get('metraz_max', 999) or 999}"
     )
 
-    # Filtr dzielnicy przez district_id (poprawna metoda OLX)
+    # District filter — numeric district_id takes priority over name lookup
     district_id = config.get("district_id")
     if not district_id and config.get("dzielnica"):
-        # obsługa nazwy dzielnicy jako alternatywy dla district_id
         dzielnica_norm = _normalize_name(config["dzielnica"])
-        district_id = CITY_DISTRICT_IDS.get(miasto, {}).get(dzielnica_norm)
+        # Check country config districts first (for non-PL countries)
+        if country_cfg and "cities" in country_cfg:
+            city_data = country_cfg["cities"].get(miasto, {})
+            country_districts = {
+                _normalize_name(k): v
+                for k, v in city_data.get("districts", {}).items()
+            }
+            district_id = country_districts.get(dzielnica_norm)
+        # Fall back to built-in PL district map
+        if not district_id:
+            district_id = CITY_DISTRICT_IDS.get(miasto, {}).get(dzielnica_norm)
         if not district_id:
             logger.warning(
-                "Nieznana dzielnica '%s' dla miasta '%s' – szukaj po całym mieście "
-                "lub ustaw district_id ręcznie.",
+                "Unknown district '%s' for city '%s' — searching the whole city. "
+                "Set district_id manually if needed.",
                 config["dzielnica"], miasto,
             )
     if district_id:
@@ -466,7 +521,7 @@ def build_url(config: dict, page: int = 1) -> str:
     return url
 
 
-# ── Pobieranie i parsowanie ───────────────────────────────────
+# ── Fetching and parsing ──────────────────────────────────────
 
 def fetch_page(url: str) -> BeautifulSoup | None:
     try:
@@ -474,45 +529,44 @@ def fetch_page(url: str) -> BeautifulSoup | None:
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except requests.HTTPError as e:
-        logger.error("Błąd HTTP %s dla %s", e.response.status_code if e.response else "?", url)
+        logger.error("HTTP error %s for %s", e.response.status_code if e.response else "?", url)
         return None
     except requests.RequestException as e:
-        logger.error("Nie można pobrać strony %s: %s", url, e)
+        logger.error("Cannot fetch page %s: %s", url, e)
         return None
 
 
 def extract_id_from_url(url: str) -> str:
-    """Wyciąga ID z URL, np. 'ID19HnE4' z '.../oferta/...-CID3-ID19HnE4.html'"""
+    """Extracts the listing ID from a URL, e.g. 'ID19HnE4' from '.../oferta/...-CID3-ID19HnE4.html'."""
     m = re.search(r"-(ID[A-Za-z0-9]+)\.html", url)
     if m:
         return m.group(1)
     return url.strip("/").split("/")[-1][-12:]
 
 
-def parse_price(text: str) -> int | None:
+def parse_price(text: str, currency_pattern: str | None = None) -> int | None:
+    """Parses a price from text.
+
+    Supports PLN by default: '3 000 zł', '3000 zl', '3 000 PLN', '4 500 złdo negocjacji'.
+    Pass currency_pattern to override for other currencies, e.g. r'грн\\.?|uah' for UAH.
+    Falls back to extracting the first digit sequence if no currency match is found.
     """
-    Parsuje cenę z tekstu. Obsługuje warianty:
-      '3 000 zł', '3000 zl', '3 000 PLN', '3000 pln',
-      '3000 zlotych', '3000 złotych', '4 500 złdo negocjacji'
-    """
-    # Ujednolicamy: małe litery, spacje nierozdzielające → spacja
     t = text.lower().replace("\xa0", " ")
-    # Wytnij część przed jednostką walutową
-    unit = re.search(r"(\d[\d\s]*)(?:z[łl]|pln|z?[łl]otych)", t)
+    pattern = currency_pattern or r"z[łl]|pln|z?[łl]otych"
+    unit = re.search(rf"(\d[\d\s]*)(?:{pattern})", t)
     if unit:
         digits = re.sub(r"[^\d]", "", unit.group(1))
         return int(digits) if digits else None
-    # Fallback: weź pierwszą sekwencję cyfr z tekstu
+    # Fallback: take the first digit sequence — guards against phone numbers
     digits = re.sub(r"[^\d]", "", t)
     if digits:
         value = int(digits)
-        # sanity check – odrzuca numery tel. itp.
-        return value if value <= 99_999 else None
+        return value if value <= 999_999 else None
     return None
 
 
 def parse_metraz(text: str) -> float | None:
-    """'65 m²' lub '65,5m2' → 65.0"""
+    """'65 m²' or '65,5m2' → 65.0"""
     m = re.search(r"([\d]+[,\.]?[\d]*)\s*m", text)
     if m:
         try:
@@ -522,57 +576,67 @@ def parse_metraz(text: str) -> float | None:
     return None
 
 
-def parse_listings(soup: BeautifulSoup) -> list[Listing]:
-    """
-    Parsuje ogłoszenia ze strony OLX.
+def parse_listings(
+    soup: BeautifulSoup,
+    base_url: str = "https://www.olx.pl",
+    currency_hints: list[str] | None = None,
+) -> list[Listing]:
+    """Parses listing cards from an OLX results page.
 
-    Aktualny format (kwiecień 2026):
-    - Karty ogłoszeń: <div data-cy="l-card">
-    - Tytuł: <h4> lub <h6> wewnątrz karty
-    - Cena: element z data-testid="ad-price" lub tekst "X zł"
-    - Lokalizacja+data: data-testid="location-date", format "Miasto, Dzielnica - data"
-    - Metraż: tekst zawierający "m²" w karcie (np. "65 m²")
+    Args:
+        soup: Parsed HTML of the results page.
+        base_url: Domain base used to fix relative listing URLs (e.g. 'https://www.olx.ua').
+        currency_hints: Strings that indicate a price element in the fallback path.
+                        Defaults to ['zł'] for Poland.
+
+    Current card format (April 2026):
+    - Cards: <div data-cy="l-card">
+    - Title: <h4>/<h6>/<h3> inside the card
+    - Price: data-testid="ad-price" element, or text containing a currency hint
+    - Location+date: data-testid="location-date", format "City, District - date"
+    - Area: text containing 'm²' or 'm2'
     """
+    _currency_hints = currency_hints or ["zł"]
     listings = []
     cards = soup.find_all(attrs={"data-cy": "l-card"})
 
     for card in cards:
         try:
-            # ── Link i ID ──
+            # ── Link and ID ──
             link_tag = card.find("a", href=True)
             if not link_tag:
                 continue
             url = link_tag["href"]
             if not url.startswith("http"):
-                url = "https://www.olx.pl" + url
+                url = base_url + url
             ad_id = extract_id_from_url(url)
 
-            # ── Tytuł ──
+            # ── Title ──
             title_tag = card.find(["h4", "h6", "h3"])
             title = title_tag.get_text(strip=True) if title_tag else link_tag.get_text(strip=True)
             if not title:
                 continue
 
-            # ── Cena ──
+            # ── Price ──
             price_tag = card.find(attrs={"data-testid": "ad-price"})
             price = None
             if price_tag:
                 price = parse_price(price_tag.get_text(strip=True))
             else:
-                # Fallback: szukaj tekstu z "zł" w karcie
+                # Fallback: find a string that contains a currency hint and digits
                 for s in card.strings:
-                    if "zł" in s and re.search(r"\d", s):
+                    if any(h in s for h in _currency_hints) and re.search(r"\d", s):
                         price = parse_price(s)
                         break
 
-            # ── Lokalizacja i data ──
+            # ── Location and date ──
             loc_tag = card.find(attrs={"data-testid": "location-date"})
             location_text = loc_tag.get_text(strip=True) if loc_tag else ""
             lokalizacja = location_text.split(" - ")[0].strip()
             data_dodania = location_text.split(" - ")[1].strip() if " - " in location_text else ""
 
-            # ── Metraż ──
-            # OLX wyświetla metraż jako osobny element, np. "65 m²"
+            # ── Area ──
+            # OLX shows the area as a separate element, e.g. "65 m²"
             metraz = None
             for s in card.strings:
                 s = s.strip()
@@ -580,7 +644,7 @@ def parse_listings(soup: BeautifulSoup) -> list[Listing]:
                     metraz = parse_metraz(s)
                     if metraz:
                         break
-            # Fallback: szukaj w tytule
+            # Fallback: look in the title
             if not metraz:
                 metraz = parse_metraz(title)
 
@@ -595,28 +659,27 @@ def parse_listings(soup: BeautifulSoup) -> list[Listing]:
             })
 
         except Exception as e:
-            logger.debug("Pominięto kartę ogłoszenia z powodu błędu: %s", e, exc_info=True)
+            logger.debug("Skipped listing card due to error: %s", e, exc_info=True)
             continue
 
     return listings
 
 
-# ── Podstrona ogłoszenia – opis i dodatkowe koszty ───────────
+# ── Listing detail page – description and extra costs ────────
 
 def fetch_detail(url: str) -> tuple[str, int]:
-    """
-    Pobiera treść opisu z podstrony ogłoszenia OLX.
+    """Fetches the description text from an OLX listing detail page.
 
-    Zwraca:
-        (opis_tekst, czynsz_dodatkowy) — opis jako lowercase string
-        oraz kwotę z pola "Czynsz (dodatkowo)" z sidebara OLX (0 jeśli brak).
+    Returns:
+        (description_text, extra_fee) — description as a lowercase string
+        and the amount from the "Czynsz (dodatkowo)" OLX sidebar field (0 if absent).
     """
     try:
         resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Aktualny selektor opisu na OLX (kwiecień 2026)
+        # Active OLX description selector (April 2026)
         desc_tag = (
             soup.find(attrs={"data-cy": "ad_description"})
             or soup.find(attrs={"itemprop": "description"})
@@ -624,7 +687,7 @@ def fetch_detail(url: str) -> tuple[str, int]:
         )
         desc_text = desc_tag.get_text(" ", strip=True).lower() if desc_tag else ""
 
-        # Pole strukturalne "Czynsz (dodatkowo): NNN zł" z sidebara OLX
+        # Structured "Czynsz (dodatkowo): NNN zł" field from the OLX sidebar
         structured_extra = 0
         for el in soup.find_all(string=re.compile(r"czynsz.*dodatkowo", re.I)):
             parent = el.find_parent()
@@ -634,7 +697,7 @@ def fetch_detail(url: str) -> tuple[str, int]:
                 if m:
                     structured_extra = int(re.sub(r"\s", "", m.group(1)))
                     break
-        # Fallback: szukaj w całej stronie elementów z "Czynsz" + kwotą obok
+        # Fallback: search the whole page for "Czynsz" elements with an adjacent amount
         if not structured_extra:
             for el in soup.find_all(string=re.compile(r"^Czynsz", re.I)):
                 parent = el.find_parent()
@@ -648,86 +711,84 @@ def fetch_detail(url: str) -> tuple[str, int]:
 
         return desc_text, structured_extra
     except requests.RequestException as e:
-        logger.warning("Nie można pobrać szczegółów ogłoszenia %s: %s", url, e)
+        logger.warning("Cannot fetch listing details %s: %s", url, e)
         return "", 0
 
 
-# Wzorce fraz wskazujących że opłaty SĄ wliczone w cenę (→ ekstra = 0)
+# Phrases indicating that fees ARE included in the price (→ extra = 0)
 WLICZONE_PATTERNS = [
-    r"wszystk[oi][em]?\s+w\s+cen[ie]",       # "wszystko w cenie", "wszystkim w cen"
-    r"w\s+tym\s+czynsz",                       # "w tym czynsz"
-    r"media\s+wliczon[ea]",                    # "media wliczone/a"
-    r"rachunk[i]?\s+wliczon[ea]",             # "rachunki wliczone"
-    r"op[łl]aty\s+wliczon[ea]",               # "opłaty wliczone"
-    r"bez\s+dodatkowych\s+op[łl]at",          # "bez dodatkowych opłat"
-    r"czynsz\s+do\s+sp[oó][łl]dzielni\s+wliczon", # "czynsz do spółdzielni wliczony"
-    r"c\.?o\.?\s+wliczon",                    # "c.o. wliczone"
-    r"cena\s+zawiera",                         # "cena zawiera"
-    r"cena\s+obejmuje",                        # "cena obejmuje"
+    r"wszystk[oi][em]?\s+w\s+cen[ie]",       # "wszystko w cenie" — everything included
+    r"w\s+tym\s+czynsz",                       # "w tym czynsz" — rent included
+    r"media\s+wliczon[ea]",                    # "media wliczone" — utilities included
+    r"rachunk[i]?\s+wliczon[ea]",             # "rachunki wliczone" — bills included
+    r"op[łl]aty\s+wliczon[ea]",               # "opłaty wliczone" — fees included
+    r"bez\s+dodatkowych\s+op[łl]at",          # "bez dodatkowych opłat" — no extra fees
+    r"czynsz\s+do\s+sp[oó][łl]dzielni\s+wliczon", # admin rent included
+    r"c\.?o\.?\s+wliczon",                    # "c.o. wliczone" — central heating included
+    r"cena\s+zawiera",                         # "cena zawiera" — price includes
+    r"cena\s+obejmuje",                        # "cena obejmuje" — price covers
 ]
 
-# Wzorce wyciągające kwoty dodatkowych kosztów
-# Szukamy kwot poprzedzonych lub następujących po słowach kluczowych
+# Patterns that extract additional cost amounts
+# We look for amounts preceded or followed by cost-related keywords
 KOSZT_PATTERNS = [
-    # "czynsz administracyjny/administracji 1100-1150" lub "czynsz administracji 400-500 zł" (zakres, zł opcjonalne)
+    # "czynsz administracyjny 1100-1150" or "czynsz administracji 400-500 zł" (range, zł optional)
     r"czynsz\s*(?:administracyjny|administracji|do\s+sp[oó][łl]dzielni|do\s+administracji|zarz[aą]dcy?)[\s:\-–]+(\d[\d\s]{1,5})\s*(?:-|–|do)\s*(\d[\d\s]{1,5})\s*(?:z[łl])?",
-    # "czynsz administracyjny/administracji: 400 zł" lub "czynsz do administracji: 920 zł/1 osoba"
+    # "czynsz administracyjny: 400 zł" or "czynsz do administracji: 920 zł/1 osoba"
     r"czynsz\s*(?:administracyjny|administracji|do\s+sp[oó][łl]dzielni|do\s+administracji|zarz[aą]dcy?)[\s:\-–]+(\d[\d\s]{1,5})\s*z[łl]",
-    # "zaliczka na energię/prąd/gaz: 150 zł/1 osoba"
+    # "zaliczka na energię/prąd/gaz: 150 zł/1 osoba" (advance payment for energy/gas)
     r"zaliczka\s+(?:na\s+)?(?:energi[ęe]|pr[aą]d|gaz|media)[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "opłata/opłaty eksploatacyjne 350 zł"
+    # "opłaty eksploatacyjne 350 zł" (service charges)
     r"op[łl]at[ay]\s*(?:eksploatacyjn[ae]|administracyjn[ae]|za\s+mieszkanie)?[\s:\-–]+(\d[\d\s]{1,5})\s*z[łl]",
-    # "media ok. 300 zł / media ~250 zł"
+    # "media ok. 300 zł / media ~250 zł" (utilities ~300 PLN)
     r"media[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
     # "+czynsz (obecnie ok 700zł)" / "+czynsz (opłata administracyjna): ok. 700 zł"
     r"\+\s*czynsz[^0-9]{0,60}(\d[\d\s]{1,4})\s*z[łl]",
-    # "czynsz (opłata administracyjna): ok. 700 zł" (bez plusa, z nawiasem opisującym)
+    # "czynsz (opłata administracyjna): ok. 700 zł" (no plus sign, parenthetical description)
     r"czynsz\s*\([^)]{0,40}\)\s*:?\s*(?:ok\.?\s+)?(\d[\d\s]{1,4})\s*z[łl]",
     # "+ 400 zł czynsz" / "+ 300 zł opłaty"
     r"\+\s*(\d[\d\s]{1,4})\s*z[łl]\s*(?:czynsz|op[łl]at|media|rachunk)",
-    # "NNN zł za opłaty/czynsz" (np. "645 zł za opłaty administracyjne")
+    # "NNN zł za opłaty/czynsz" (e.g. "645 zł za opłaty administracyjne")
     r"(\d[\d\s]{1,5})\s*z[łl]\s*za\s*(?:op[łl]at[yę]|czynsz|media|rachunk)\w*",
-    # "2400 zł + 850 zł (opłaty administracyjne...)" — format otodom: cena + opłaty w nawiasie
+    # "2400 zł + 850 zł (opłaty administracyjne...)" — otodom format: price + fees in parentheses
     r"\d[\d\s]*\s*z[łl]\s*\+\s*(\d[\d\s]{1,5})\s*z[łl]\s*\(",
-    # "= 3250 zł/miesiąc" przy strukturze cena + opłaty = łącznie (bierz łączną i odejmuj cenę najmu)
-    # obsługiwane przez wzorzec wyżej — łącznie wyciąga kwotę opłat
-    # "rachunki około 200-300 zł" → bierz wyższą
+    # "rachunki około 200-300 zł" (bills approx. range) → take the higher value
     r"rachunk[i]?[\s:\-–~\w\.]+(\d[\d\s]{1,4})\s*(?:-|–|do)\s*(\d[\d\s]{1,4})\s*z[łl]",
-    # "rachunki 250 zł" / "+ ok 250 rachunki za media"
+    # "rachunki 250 zł" / "+ ok 250 rachunki za media" (bills 250 PLN)
     r"rachunk[i]?[\s:\-–~\w\.]+(\d[\d\s]{1,4})\s*z[łl]",
     r"\+\s*(?:ok\.?\s+)?(\d[\d\s]{1,3})\s+rachunki?\s+za\s+media",
-    # "koszty eksploatacji 450 zł"
+    # "koszty eksploatacji 450 zł" (operating costs)
     r"koszty\s+eksploatacji[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "do tego/dodatkowo 300 zł"
+    # "do tego/dodatkowo 300 zł" (additionally 300 PLN)
     r"(?:do\s+tego|dodatkowo|plus|poza\s+tym)[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "c.o. 150 zł / c/o: 200 zł"
+    # "c.o. 150 zł" (central heating 150 PLN)
     r"c\.?o\.?[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "wywóz śmieci 50 zł"
+    # "wywóz śmieci 50 zł" (waste collection)
     r"(?:wywo[zź]\s+)?[śs]mieci[\s:\-–]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "ogrzewanie 150 zł / ogrzewanie ok. 200 zł"
+    # "ogrzewanie 150 zł / ogrzewanie ok. 200 zł" (heating)
     r"ogrzewanie[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "woda 50 zł / zimna/ciepła woda 80 zł"
+    # "woda 50 zł / zimna/ciepła woda 80 zł" (water)
     r"(?:zimna\s+|ciep[łl]a\s+)?woda[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "prąd 120 zł / energia elektryczna 90 zł"
+    # "prąd 120 zł / energia elektryczna 90 zł" (electricity)
     r"(?:pr[aą]d|energia\s+elektryczna)[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "gaz 80 zł"
+    # "gaz 80 zł" (gas)
     r"gaz[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
     # "internet 70 zł / tv 50 zł"
     r"(?:internet|tv|telewizja)[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
-    # "miejsce parkingowe 250 zł / garaż 300 zł"
+    # "miejsce parkingowe 250 zł / garaż 300 zł" (parking / garage)
     r"(?:miejsce\s+postojowe|miejsce\s+parkingowe|parking|gara[zż])[\s:\-–~ok\.]+(\d[\d\s]{1,4})\s*z[łl]",
 ]
 
-# Wzmianki o kosztach bez podanej kwoty. Nie wpływają na sumę, ale są ważnym
-# sygnałem ryzyka przy filtrach i ocenie AI.
+# Cost mentions without a stated amount. They do not affect the total but are an
+# important risk signal for filters and AI evaluation.
 UNKNOWN_COST_PATTERNS = [
-    (r"media\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "media według zużycia — kwota nieznana"),
-    (r"(?:pr[aą]d|energia\s+elektryczna)\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "prąd według zużycia — kwota nieznana"),
-    (r"gaz\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "gaz według zużycia — kwota nieznana"),
-    (r"woda\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "woda według zużycia — kwota nieznana"),
-    (r"ogrzewanie\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "ogrzewanie według zużycia — kwota nieznana"),
-    (r"czynsz\s+administracyjny\s+do\s+ustalenia", "czynsz administracyjny — kwota nieznana"),
-    (r"op[łl]aty\s+eksploatacyjne\s+do\s+ustalenia", "opłaty eksploatacyjne — kwota nieznana"),
+    (r"media\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "utilities billed by usage — amount unknown"),
+    (r"(?:pr[aą]d|energia\s+elektryczna)\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "electricity billed by usage — amount unknown"),
+    (r"gaz\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "gas billed by usage — amount unknown"),
+    (r"woda\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "water billed by usage — amount unknown"),
+    (r"ogrzewanie\s+(?:wed[łl]ug|wg)\s+zu[zż]ycia", "heating billed by usage — amount unknown"),
+    (r"czynsz\s+administracyjny\s+do\s+ustalenia", "admin fee to be negotiated — amount unknown"),
+    (r"op[łl]aty\s+eksploatacyjne\s+do\s+ustalenia", "service charges to be negotiated — amount unknown"),
 ]
 
 
@@ -735,48 +796,47 @@ def extract_extra_costs(
     description: str,
     structured_extra: int = 0,
 ) -> tuple[int, list[str]]:
-    """
-    Analizuje opis ogłoszenia i wyciąga sumę dodatkowych kosztów.
+    """Analyses a listing description and extracts the total additional costs.
 
     Args:
-        description: Tekst opisu (lowercase).
-        structured_extra: Kwota z pola "Czynsz (dodatkowo)" z sidebara OLX.
+        description: Description text (lowercase).
+        structured_extra: Amount from the "Czynsz (dodatkowo)" OLX sidebar field.
 
-    Zwraca:
-        (suma_extra_zl, lista_znalezionych_pozycji)
+    Returns:
+        (total_extra_amount, list_of_found_items)
 
-    Logika:
-    1. Jeśli opis zawiera frazy "wszystko w cenie" itp. → extra = 0
-    2. W przeciwnym razie szukaj kwot przy słowach kluczowych i sumuj
-    3. Jeśli sidebar OLX zawiera "Czynsz (dodatkowo)" — używa wyższej wartości
-       (structured vs regex) jako ostateczny wynik
-    4. Zakresy (np. "200-400 zł") → bierze wyższą wartość (pesymistyczne podejście)
+    Logic:
+    1. If the description contains "all inclusive" phrases → extra = 0
+    2. Otherwise search for amounts next to cost keywords and sum them up
+    3. If the OLX sidebar contains a "Czynsz (dodatkowo)" value — use whichever is higher
+       (structured vs regex) as the final result
+    4. For ranges (e.g. "200-400 PLN") → take the higher value (pessimistic approach)
     """
     if not description:
-        return 0, ["(brak opisu – koszty nieznane)"]
+        return 0, ["(no description — costs unknown)"]
 
-    # Normalizuj kwoty z przecinkiem dziesiętnym: "600,00 zł" → "600 zł"
+    # Normalise decimal amounts: "600,00 zł" → "600 zł"
     description = re.sub(r"(\d),\d{2}\s*z", r"\1 z", description)
 
     for pattern in WLICZONE_PATTERNS:
         if re.search(pattern, description, re.I):
-            return 0, ["oplaty wliczone w cene"]
+            return 0, ["fees included in price"]
 
     found_items = []
     total_extra = 0
-    used_spans = []  # dedup — ta sama pozycja w tekście może pasować do kilku wzorców
+    used_spans = []  # dedup — the same text position may match multiple patterns
 
     for pattern in KOSZT_PATTERNS:
         for match in re.finditer(pattern, description, re.I):
             span = match.span()
 
-            # Pomiń nakładające się dopasowania
+            # Skip overlapping matches
             if any(s[0] < span[1] and span[0] < s[1] for s in used_spans):
                 continue
             used_spans.append(span)
 
             groups = [g for g in match.groups() if g is not None]
-            # Jeśli zakres (np. "200-400"), bierz wyższą
+            # For ranges (e.g. "200-400") take the higher value
             amounts = []
             for g in groups:
                 try:
@@ -785,9 +845,9 @@ def extract_extra_costs(
                     pass
 
             if amounts:
-                kwota = max(amounts)  # pesymistycznie: bierze wyższy koniec zakresu
-                total_extra += kwota
-                found_items.append(f"{match.group(0).strip()} → {kwota} zł")
+                amount = max(amounts)  # pessimistic: take the upper end of the range
+                total_extra += amount
+                found_items.append(f"{match.group(0).strip()} → {amount} PLN")
 
     unknown_items: list[str] = []
     for pattern, label in UNKNOWN_COST_PATTERNS:
@@ -796,59 +856,59 @@ def extract_extra_costs(
 
     if not found_items:
         if structured_extra > 0:
-            return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+            return structured_extra, [f"Admin fee (OLX sidebar): {structured_extra} PLN"]
         if unknown_items:
             return 0, unknown_items
-        return 0, ["(nie znaleziono wzmianek o dodatkowych kosztach)"]
+        return 0, ["(no additional cost mentions found)"]
 
     if structured_extra > total_extra:
-        return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+        return structured_extra, [f"Admin fee (OLX sidebar): {structured_extra} PLN"]
 
     return total_extra, found_items + unknown_items
 
 
-LLM_PROMPT = """Przeanalizuj poniższy opis ogłoszenia o wynajmie mieszkania i wyodrębnij TYLKO dodatkowe koszty miesięczne, które NIE są wliczone w cenę najmu (np. czynsz administracyjny, media, opłaty eksploatacyjne, c.o., woda, śmieci, ogrzewanie, rachunki itp.).
+LLM_PROMPT = """Analyse the following apartment rental listing description and extract ONLY the additional monthly costs that are NOT included in the rent price (e.g. admin fee, utilities, service charges, central heating, water, waste collection, heating, bills, etc.).
 
-Zasady:
-- Jeśli opis mówi że wszystko jest wliczone w cenę lub media są wliczone — zwróć 0.
-- Jeśli nie ma żadnych wzmianek o kosztach dodatkowych — zwróć 0.
-- Dla zakresów (np. "700-800 zł") wybierz wyższą wartość.
-- Jeśli koszt podany jest jako stawka per osoba (np. "920 zł/1 osoba; 1 110 zł/2 osoby; ...") — zawsze bierz wartość dla 1 osoby (pierwszą).
-- Zsumuj wszystkie osobne pozycje kosztów (czynsz + media + zaliczki itp.).
+Rules:
+- If the description says everything is included in the price or utilities are included — return 0.
+- If there are no mentions of additional costs — return 0.
+- For ranges (e.g. "700-800 PLN") choose the higher value.
+- If a cost is stated per person (e.g. "920 PLN/1 person; 1110 PLN/2 people; ...") — always take the 1-person value (the first one).
+- Sum all separate cost items (admin fee + utilities + advance payments etc.).
 
-Odpowiedz WYŁĄCZNIE w formacie JSON (bez markdown, bez wyjaśnień):
-{"extra_koszt": <liczba całkowita w zł>, "pozycje": ["opis pozycji 1", "opis pozycji 2"]}
+Respond ONLY in JSON format (no markdown, no explanation):
+{"extra_koszt": <integer amount>, "pozycje": ["description of item 1", "description of item 2"]}
 
-Opis ogłoszenia:
+Listing description:
 """
 
-LISTING_ASSESSMENT_PROMPT = """Oceń atrakcyjność ogłoszenia wynajmu mieszkania z perspektywy najemcy.
+LISTING_ASSESSMENT_PROMPT = """Evaluate the attractiveness of an apartment rental listing from a tenant's perspective.
 
-Zasady:
-- Oceń relację cena/metraż, jakość opisu, przejrzystość kosztów i czerwone flagi.
-- Uwzględnij informacje o kosztach dodatkowych, ryzyko ukrytych opłat oraz brakujące dane.
-- Jeśli użytkownik podał priorytety, potraktuj je jako dodatkowy kontekst oceny.
-- Nie zakładaj faktów, których nie ma w danych. Jeśli czegoś brakuje, zaznacz to jako ryzyko.
-- Odpowiedz WYŁĄCZNIE w JSON.
+Rules:
+- Assess price/area ratio, description quality, cost transparency, and red flags.
+- Factor in additional cost information, hidden-fee risk, and missing data.
+- If the user provided priorities, treat them as additional scoring context.
+- Do not assume facts not present in the data. If something is missing, flag it as a risk.
+- Respond ONLY in JSON.
 
-Wymagany format:
+Required format:
 {
-  "score": <liczba 0-100>,
-  "verdict": "kontaktuj" | "rozwaz" | "odpusc",
-  "summary": "krótkie uzasadnienie po polsku",
-  "strengths": ["krótki plus 1", "krótki plus 2"],
-  "risks": ["krótkie ryzyko 1", "krótkie ryzyko 2"],
+  "score": <integer 0-100>,
+  "verdict": "contact" | "consider" | "skip",
+  "summary": "brief justification in English",
+  "strengths": ["short strength 1", "short strength 2"],
+  "risks": ["short risk 1", "short risk 2"],
   "hidden_cost_risk": "low" | "medium" | "high"
 }
 
-Dane wejściowe:
+Input data:
 """
 
 LISTING_ASSESSMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "score": {"type": "integer", "minimum": 0, "maximum": 100},
-        "verdict": {"type": "string", "enum": ["kontaktuj", "rozwaz", "odpusc"]},
+        "verdict": {"type": "string", "enum": ["contact", "consider", "skip"]},
         "summary": {"type": "string"},
         "strengths": {"type": "array", "items": {"type": "string"}},
         "risks": {"type": "array", "items": {"type": "string"}},
@@ -864,7 +924,7 @@ def _build_listing_assessment_input(
     description: str,
     preferences: str = "",
 ) -> str:
-    """Serializuje dane ogłoszenia do zwartego JSON-a przekazywanego modelowi."""
+    """Serialises listing data into a compact JSON string passed to the model."""
     payload = {
         "title": listing.get("title", ""),
         "price": listing.get("price"),
@@ -881,16 +941,16 @@ def _build_listing_assessment_input(
 
 
 def _normalize_listing_assessment(data: dict[str, Any], source: str) -> dict[str, Any]:
-    """Porządkuje wynik modelu i zabezpiecza aplikację przed niepełnymi polami."""
+    """Cleans up the model result and guards against missing or invalid fields."""
     raw_score = data.get("score")
     try:
         score = max(0, min(100, int(raw_score)))
     except (TypeError, ValueError):
         score = None
 
-    verdict = str(data.get("verdict", "rozwaz")).strip().lower() or "rozwaz"
-    if verdict not in {"kontaktuj", "rozwaz", "odpusc"}:
-        verdict = "rozwaz"
+    verdict = str(data.get("verdict", "consider")).strip().lower() or "consider"
+    if verdict not in {"contact", "consider", "skip"}:
+        verdict = "consider"
 
     hidden_cost_risk = str(data.get("hidden_cost_risk", "medium")).strip().lower() or "medium"
     if hidden_cost_risk not in {"low", "medium", "high"}:
@@ -912,10 +972,10 @@ def _normalize_listing_assessment(data: dict[str, Any], source: str) -> dict[str
 
 
 def _empty_listing_assessment(source: str, reason: str) -> dict[str, Any]:
-    """Zwraca neutralny wynik, gdy ocena AI nie mogła zostać wykonana."""
+    """Returns a neutral result when AI evaluation could not be performed."""
     return {
         "ai_score": None,
-        "ai_verdict": "rozwaz",
+        "ai_verdict": "consider",
         "ai_summary": reason,
         "ai_strengths": [],
         "ai_risks": [],
@@ -933,7 +993,7 @@ def _request_openai_json(
     schema: dict[str, Any],
     timeout: int,
 ) -> dict[str, Any]:
-    """Wysyła żądanie do Chat Completions z `response_format=json_schema`."""
+    """Sends a Chat Completions request with `response_format=json_schema`."""
     resp = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -956,7 +1016,7 @@ def _request_openai_json(
 
     message = resp.json()["choices"][0]["message"]
     if message.get("refusal"):
-        raise ValueError(f"Model odmówił odpowiedzi: {message['refusal']}")
+        raise ValueError(f"Model refused to respond: {message['refusal']}")
 
     content = message.get("content", "")
     if isinstance(content, list):
@@ -967,7 +1027,7 @@ def _request_openai_json(
         )
 
     if not isinstance(content, str) or not content.strip():
-        raise ValueError("Pusta odpowiedź JSON z OpenAI")
+        raise ValueError("Empty JSON response from OpenAI")
 
     return json.loads(content)
 
@@ -979,14 +1039,13 @@ def extract_extra_costs_llm(
     llm_model: str = "llama3",
     timeout: int = 60,
 ) -> tuple[int, list[str]]:
-    """
-    Analizuje opis ogłoszenia przez lokalny LLM (Ollama) w poszukiwaniu dodatkowych kosztów.
-    Jeśli LLM nie odpowiada lub zwróci błędny JSON — fallback na regex.
+    """Analyses listing description via local Ollama LLM for additional costs.
+    Falls back to regex if the LLM is unavailable or returns invalid JSON.
     """
     if not description:
-        return 0, ["(brak opisu – koszty nieznane)"]
+        return 0, ["(no description — costs unknown)"]
 
-    prompt = LLM_PROMPT + description[:3000]  # limit żeby nie przekroczyć kontekstu
+    prompt = LLM_PROMPT + description[:3000]  # cap to avoid exceeding context window
 
     try:
         resp = requests.post(
@@ -1000,20 +1059,20 @@ def extract_extra_costs_llm(
         extra_koszt = int(data.get("extra_koszt", 0))
         pozycje = [str(p) for p in data.get("pozycje", [])]
 
-        # Jeśli sidebar OLX podał wyższą kwotę, użyj jej
+        # If the OLX sidebar reported a higher amount, use it
         if structured_extra > extra_koszt:
-            return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+            return structured_extra, [f"Admin fee (OLX sidebar): {structured_extra} PLN"]
 
         if extra_koszt == 0:
-            return 0, ["(LLM: brak dodatkowych kosztów w opisie)"]
+            return 0, ["(LLM: no additional costs found in description)"]
 
         return extra_koszt, pozycje
 
     except requests.RequestException as e:
-        logger.warning("LLM niedostępny (%s) – fallback na regex", e)
+        logger.warning("LLM unavailable (%s) — falling back to regex", e)
         return extract_extra_costs(description, structured_extra)
     except (ValueError, KeyError, json.JSONDecodeError) as e:
-        logger.warning("Błąd parsowania odpowiedzi LLM (%s) – fallback na regex", e)
+        logger.warning("Failed to parse LLM response (%s) — falling back to regex", e)
         return extract_extra_costs(description, structured_extra)
 
 
@@ -1024,14 +1083,13 @@ def extract_extra_costs_openai(
     openai_model: str = "gpt-4o-mini",
     timeout: int = 30,
 ) -> tuple[int, list[str]]:
-    """
-    Analizuje opis ogłoszenia przez OpenAI API w poszukiwaniu dodatkowych kosztów.
-    Jeśli API jest niedostępne lub zwróci błędny JSON — fallback na regex.
+    """Analyses listing description via OpenAI API for additional costs.
+    Falls back to regex if the API is unavailable or returns invalid JSON.
     """
     if not description:
-        return 0, ["(brak opisu – koszty nieznane)"]
+        return 0, ["(no description — costs unknown)"]
     if not api_key:
-        logger.warning("Brak klucza OpenAI API – fallback na regex")
+        logger.warning("Missing OpenAI API key — falling back to regex")
         return extract_extra_costs(description, structured_extra)
 
     prompt = LLM_PROMPT + description[:3000]
@@ -1057,18 +1115,18 @@ def extract_extra_costs_openai(
         pozycje = [str(p) for p in data.get("pozycje", [])]
 
         if structured_extra > extra_koszt:
-            return structured_extra, [f"Czynsz (dodatkowo) z OLX: {structured_extra} zł"]
+            return structured_extra, [f"Admin fee (OLX sidebar): {structured_extra} PLN"]
 
         if extra_koszt == 0:
-            return 0, ["(OpenAI: brak dodatkowych kosztów w opisie)"]
+            return 0, ["(OpenAI: no additional costs found in description)"]
 
         return extra_koszt, pozycje
 
     except requests.RequestException as e:
-        logger.warning("OpenAI API niedostępne (%s) – fallback na regex", e)
+        logger.warning("OpenAI API unavailable (%s) — falling back to regex", e)
         return extract_extra_costs(description, structured_extra)
     except (ValueError, KeyError, json.JSONDecodeError) as e:
-        logger.warning("Błąd parsowania odpowiedzi OpenAI (%s) – fallback na regex", e)
+        logger.warning("Failed to parse OpenAI response (%s) — falling back to regex", e)
         return extract_extra_costs(description, structured_extra)
 
 
@@ -1084,24 +1142,23 @@ def analyze_listing_with_ai(
     openai_model: str = "gpt-4o-mini",
     timeout: int = 30,
 ) -> dict[str, Any]:
-    """
-    Wzbogaca ogłoszenie o ocenę AI.
+    """Enriches a listing with an AI evaluation score.
 
-    Funkcja jest celowo oddzielona od ekstrakcji kosztów, żeby można było
-    włączać scoring niezależnie od filtra budżetu.
+    Deliberately separated from cost extraction so that scoring can be
+    enabled independently of the budget filter.
     """
     prompt = LISTING_ASSESSMENT_PROMPT + _build_listing_assessment_input(listing, description, preferences)
 
     if provider == "openai":
         if not api_key:
-            logger.warning("Brak klucza OpenAI API – pomijam ocenę AI")
-            return _empty_listing_assessment("openai", "Ocena AI niedostępna: brak klucza OpenAI API.")
+            logger.warning("Missing OpenAI API key — skipping AI evaluation")
+            return _empty_listing_assessment("openai", "AI evaluation unavailable: missing OpenAI API key.")
         try:
             data = _request_openai_json(
                 api_key=api_key,
                 model=openai_model,
                 messages=[
-                    {"role": "system", "content": "Odpowiadasz wyłącznie poprawnym JSON-em."},
+                    {"role": "system", "content": "You respond only with valid JSON."},
                     {"role": "user", "content": prompt},
                 ],
                 schema_name="listing_assessment",
@@ -1110,11 +1167,11 @@ def analyze_listing_with_ai(
             )
             return _normalize_listing_assessment(data, f"OpenAI/{openai_model}")
         except requests.RequestException as e:
-            logger.warning("OpenAI API niedostępne (%s) – pomijam ocenę AI", e)
-            return _empty_listing_assessment("openai", "Ocena AI niedostępna: brak połączenia z OpenAI.")
+            logger.warning("OpenAI API unavailable (%s) — skipping AI evaluation", e)
+            return _empty_listing_assessment("openai", "AI evaluation unavailable: cannot connect to OpenAI.")
         except (ValueError, KeyError, json.JSONDecodeError) as e:
-            logger.warning("Błąd parsowania oceny AI z OpenAI (%s)", e)
-            return _empty_listing_assessment("openai", "Ocena AI niedostępna: błędna odpowiedź modelu.")
+            logger.warning("Failed to parse AI evaluation from OpenAI (%s)", e)
+            return _empty_listing_assessment("openai", "AI evaluation unavailable: invalid model response.")
 
     try:
         resp = requests.post(
@@ -1126,15 +1183,15 @@ def analyze_listing_with_ai(
         data = _extract_json_object(resp.json().get("response", ""))
         return _normalize_listing_assessment(data, f"Ollama/{llm_model}")
     except requests.RequestException as e:
-        logger.warning("LLM niedostępny (%s) – pomijam ocenę AI", e)
-        return _empty_listing_assessment("ollama", "Ocena AI niedostępna: brak połączenia z Ollamą.")
+        logger.warning("LLM unavailable (%s) — skipping AI evaluation", e)
+        return _empty_listing_assessment("ollama", "AI evaluation unavailable: cannot connect to Ollama.")
     except (ValueError, KeyError, json.JSONDecodeError) as e:
-        logger.warning("Błąd parsowania oceny AI z LLM (%s)", e)
-        return _empty_listing_assessment("ollama", "Ocena AI niedostępna: błędna odpowiedź modelu.")
+        logger.warning("Failed to parse AI evaluation from LLM (%s)", e)
+        return _empty_listing_assessment("ollama", "AI evaluation unavailable: invalid model response.")
 
 
 def fetch_ollama_models(llm_url: str) -> list[str]:
-    """Pobiera listę dostępnych modeli z Ollamy. Zwraca [] jeśli niedostępna."""
+    """Fetches the list of available models from Ollama. Returns [] if unavailable."""
     try:
         resp = requests.get(
             f"{llm_url.rstrip('/')}/api/tags",
@@ -1147,7 +1204,7 @@ def fetch_ollama_models(llm_url: str) -> list[str]:
 
 
 def has_next_page(soup: BeautifulSoup) -> bool:
-    """Sprawdza czy istnieje następna strona wyników."""
+    """Returns True if a next results page exists."""
     return bool(
         soup.find(attrs={"data-testid": "pagination-forward"})
         or soup.find(attrs={"data-cy": "pagination-forward"})
@@ -1156,18 +1213,18 @@ def has_next_page(soup: BeautifulSoup) -> bool:
 
 
 def load_seen(path: str) -> set[str]:
-    """Wczytuje zbiór widzianych ID ogłoszeń z pliku JSON."""
+    """Loads the set of already-seen listing IDs from a JSON file."""
     p = Path(path)
     if p.exists():
         try:
             return set(json.loads(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Nie można wczytać pliku seen %s: %s", path, e)
+            logger.warning("Cannot read seen file %s: %s", path, e)
     return set()
 
 
 def save_seen(path: str, seen: set[str]) -> None:
-    """Zapisuje zbiór widzianych ID ogłoszeń do pliku JSON."""
+    """Saves the set of already-seen listing IDs to a JSON file."""
     target = _ensure_parent_dir(path)
     try:
         target.write_text(
@@ -1175,35 +1232,35 @@ def save_seen(path: str, seen: set[str]) -> None:
             encoding="utf-8"
         )
     except OSError as e:
-        logger.warning("Nie można zapisać pliku seen %s: %s", path, e)
+        logger.warning("Cannot write seen file %s: %s", path, e)
 
 
 def print_header(config: dict) -> None:
-    """Wypisuje nagłówek skanowania do stdout (tryb CLI)."""
+    """Prints the scan header to stdout (CLI mode)."""
     logger.info("='" * 28)
     logger.info("  OLX Scraper  [%s]", datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
-    dziel = f" / {config['dzielnica']}" if config.get("dzielnica") else ""
-    logger.info("  Lokalizacja: %s%s", config["miasto"], dziel)
-    logger.info("  Cena:   %s–%s zl/mies.", config["cena_min"], config["cena_max"])
-    logger.info("  Metraz: %s–%s m2", config["metraz_min"], config["metraz_max"])
+    district = f" / {config['dzielnica']}" if config.get("dzielnica") else ""
+    logger.info("  Location: %s%s", config["miasto"], district)
+    logger.info("  Price:  %s–%s /month", config["cena_min"], config["cena_max"])
+    logger.info("  Area:   %s–%s m2", config["metraz_min"], config["metraz_max"])
     if config.get("budzet_lacznie"):
-        logger.info("  Budzet lacznie: max %s zl", config["budzet_lacznie"])
+        logger.info("  Total budget: max %s", config["budzet_lacznie"])
     logger.info("='" * 28)
 
 
 def print_listing(listing: dict) -> None:
-    """Wypisuje szczegóły ogłoszenia do loggera (tryb CLI)."""
-    cena = f"{listing['price']} zl/mies." if listing["price"] else "cena ukryta"
-    metraz = f"{listing['metraz']:.1f} m2" if listing["metraz"] else "? m2"
-    logger.info("  [NOWE] %s", "-" * 44)
-    logger.info("  Tytul:  %s", listing["title"])
-    logger.info("  Czynsz: %s   Metraz: %s", cena, metraz)
+    """Prints listing details to the logger (CLI mode)."""
+    price = f"{listing['price']} /month" if listing["price"] else "price hidden"
+    area = f"{listing['metraz']:.1f} m2" if listing["metraz"] else "? m2"
+    logger.info("  [NEW] %s", "-" * 44)
+    logger.info("  Title:  %s", listing["title"])
+    logger.info("  Rent: %s   Area: %s", price, area)
 
     extra = listing.get("extra_koszt")
     if extra is not None and extra > 0:
-        lacznie = (listing["price"] or 0) + extra
-        logger.info("  Dodatki: %s zl/mies.", extra)
-        logger.info("  Lacznie: %s zl/mies.", lacznie)
+        total = (listing["price"] or 0) + extra
+        logger.info("  Extra fees: %s /month", extra)
+        logger.info("  Total:      %s /month", total)
         for item in listing.get("extra_pozycje", []):
             logger.info("    - %s", item)
     elif listing.get("extra_pozycje"):
@@ -1212,29 +1269,29 @@ def print_listing(listing: dict) -> None:
 
     if listing.get("ai_score") is not None:
         logger.info(
-            "  AI: %s/100 (%s, ryzyko kosztów: %s)",
+            "  AI: %s/100 (%s, hidden cost risk: %s)",
             listing["ai_score"],
-            listing.get("ai_verdict", "rozwaz"),
+            listing.get("ai_verdict", "consider"),
             listing.get("ai_hidden_cost_risk", "medium"),
         )
         if listing.get("ai_summary"):
             logger.info("  AI note: %s", listing["ai_summary"])
 
     if listing["lokalizacja"]:
-        logger.info("  Lokalizacja: %s", listing["lokalizacja"])
+        logger.info("  Location: %s", listing["lokalizacja"])
     if listing["data"]:
-        logger.info("  Data: %s", listing["data"])
+        logger.info("  Posted: %s", listing["data"])
     logger.info("  URL: %s", listing["url"])
 
 
-# iMessage na macOS via AppleScript
+# iMessage on macOS via AppleScript
 
 def send_imessage(
     number: str,
     message: str,
     log_fn: Callable[[str], None] | None = None,
 ) -> None:
-    """Wysyła wiadomość przez iMessage/Messages.app na macOS via AppleScript."""
+    """Sends a message via iMessage/Messages.app on macOS using AppleScript."""
     def _log(msg: str) -> None:
         if log_fn:
             log_fn(msg)
@@ -1242,7 +1299,7 @@ def send_imessage(
             logger.info(msg)
 
     safe_msg = message.replace("\\", "\\\\").replace('"', '\\"')
-    # Escapuj numer żeby uniknąć injection w kontekście AppleScript
+    # Escape the number to prevent injection in the AppleScript context
     safe_number = number.replace("\\", "\\\\").replace('"', '\\"')
 
     script = f'''
@@ -1269,28 +1326,32 @@ def send_imessage(
 
 
 def format_imessage(listing: dict) -> str:
-    """Formatuje ogłoszenie jako wiadomość iMessage."""
-    cena = f"{listing['price']} zl" if listing["price"] else "cena ukryta"
+    """Formats a listing as an iMessage notification."""
+    cena = f"{listing['price']} PLN" if listing["price"] else "price hidden"
     metraz = f"{listing['metraz']:.0f}m2" if listing["metraz"] else ""
 
     extra = listing.get("extra_koszt", 0) or 0
     if extra > 0:
         lacznie = (listing["price"] or 0) + extra
-        koszt_info = f"+ {extra} zl oplaty = {lacznie} zl lacznie"
+        koszt_info = f"+ {extra} PLN fees = {lacznie} PLN total"
     else:
         koszt_info = ""
 
     parts = [p for p in [cena, metraz, listing["lokalizacja"]] if p]
-    msg = f"Nowe na OLX:\n{listing['title']}\n{' | '.join(parts)}\n"
+    msg = f"New on OLX:\n{listing['title']}\n{' | '.join(parts)}\n"
     if koszt_info:
         msg += f"{koszt_info}\n"
     msg += listing["url"]
     return msg
 
 
-# Główna pętla skanowania dla trybu CLI.
+# Main scanning loop for CLI mode.
 def scrape_once(config: dict, seen: set[str]) -> int:
-    """Skanuje OLX i powiadamia o nowych ogłoszeniach. Zwraca liczbę nowych."""
+    """Scans OLX and notifies about new listings. Returns the count of new listings."""
+    country_cfg = load_country_config(config.get("country", "pl"))
+    base_url = f"https://{country_cfg['domain']}" if country_cfg.get("domain") else "https://www.olx.pl"
+    currency_hints = country_cfg.get("currency_symbols") or ["zł"]
+
     print_header(config)
     new_count = 0
 
@@ -1300,31 +1361,31 @@ def scrape_once(config: dict, seen: set[str]) -> int:
 
     for page in range(1, limit + 1):
         label = f"{page}/{'all' if wszystkie else limit}"
-        url = build_url(config, page)
-        logger.info("  Strona %s: %s", label, url)
+        url = build_url(config, page, country_cfg)
+        logger.info("  Page %s: %s", label, url)
 
         soup = fetch_page(url)
         if not soup:
             break
 
-        listings = parse_listings(soup)
-        logger.info("  Ogłoszeń na stronie: %d", len(listings))
+        listings = parse_listings(soup, base_url=base_url, currency_hints=currency_hints)
+        logger.info("  Listings on page: %d", len(listings))
 
         if not listings:
-            logger.info("  Brak wyników – zatrzymuję.")
+            logger.info("  No results — stopping.")
             break
 
         for listing in listings:
             if listing["id"] in seen:
                 continue
 
-            # Filtr metrażu (lokalny)
+            # Area filter (local)
             if listing["metraz"] is not None:
                 if not (config["metraz_min"] <= listing["metraz"] <= config["metraz_max"]):
                     seen.add(listing["id"])
                     continue
 
-            # Szczegóły pobieramy tylko wtedy, gdy są potrzebne do filtrów albo AI.
+            # Fetch details only when needed for the budget filter or AI.
             budzet = config.get("budzet_lacznie")
             ai_enabled = config.get("ai_enabled", False)
             should_fetch_detail = (budzet and listing["price"] is not None) or ai_enabled
@@ -1332,7 +1393,7 @@ def scrape_once(config: dict, seen: set[str]) -> int:
             structured_extra = 0
 
             if should_fetch_detail:
-                logger.info("    ↳ Sprawdzam szczegóły: %s...", listing["url"].split("/")[-1][:40])
+                logger.info("    ↳ Checking details: %s...", listing["url"].split("/")[-1][:40])
                 opis, structured_extra = fetch_detail(listing["url"])
 
             if budzet and listing["price"] is not None:
@@ -1362,13 +1423,13 @@ def scrape_once(config: dict, seen: set[str]) -> int:
                 lacznie = listing["price"] + extra_koszt
                 if lacznie > budzet:
                     logger.info(
-                        "  odrzucone (%s + %s = %s zl > limit %s zl)",
+                        "  rejected (%s + %s = %s PLN > limit %s PLN)",
                         listing["price"], extra_koszt, lacznie, budzet,
                     )
                     seen.add(listing["id"])
                     time.sleep(DELAY_BETWEEN_REQUESTS)
                     continue
-                logger.info("  ok (%s zl lacznie, limit: %s zl)", lacznie, budzet)
+                logger.info("  ok (%s PLN total, limit: %s PLN)", lacznie, budzet)
                 time.sleep(DELAY_BETWEEN_REQUESTS)
             else:
                 listing["extra_koszt"] = None
@@ -1401,7 +1462,7 @@ def scrape_once(config: dict, seen: set[str]) -> int:
                 send_imessage(config["imessage_numer"], msg)
 
         if not has_next_page(soup):
-            logger.info("  Ostatnia strona – koniec.")
+            logger.info("  Last page — done.")
             break
 
         time.sleep(DELAY_BETWEEN_PAGES)
@@ -1410,26 +1471,26 @@ def scrape_once(config: dict, seen: set[str]) -> int:
 
 
 def main() -> None:
-    """Punkt wejścia CLI — parsuje argumenty i uruchamia skanowanie."""
+    """CLI entry point — parses arguments and starts scanning."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
     parser = argparse.ArgumentParser(
-        description="OLX.pl scraper – wynajem mieszkań z powiadomieniami iMessage"
+        description="OLX scraper for apartment rentals with iMessage notifications"
     )
     parser.add_argument(
         "--debug", action="store_true",
-        help="Włącz szczegółowe logi (DEBUG)"
+        help="Enable verbose logging (DEBUG)"
     )
     parser.add_argument(
         "--interval", type=int, default=0,
-        help="Interwał w sekundach (0=jednorazowo, 86400=raz na dobę)"
+        help="Scan interval in seconds (0 = run once, 86400 = once a day)"
     )
     parser.add_argument(
         "--reset", action="store_true",
-        help="Wyczyść pamięć widzianych ogłoszeń"
+        help="Clear the seen-listings cache"
     )
     args = parser.parse_args()
     if args.debug:
@@ -1439,31 +1500,31 @@ def main() -> None:
 
     if args.reset:
         Path(seen_path).unlink(missing_ok=True)
-        logger.info("Pamiec wyczyszczona.")
+        logger.info("Cache cleared.")
 
     seen = load_seen(seen_path)
-    logger.info("Zapamiętanych ogloszen: %d", len(seen))
+    logger.info("Seen listings loaded: %d", len(seen))
 
     if args.interval > 0:
         h = args.interval / 3600
-        logger.info("Tryb ciagly - sprawdzanie co %.1fh (Ctrl+C = stop)", h)
+        logger.info("Continuous mode — scanning every %.1fh (Ctrl+C to stop)", h)
         try:
             while True:
                 nowe = scrape_once(CONFIG, seen)
                 save_seen(seen_path, seen)
                 nastepne = datetime.fromtimestamp(time.time() + args.interval)
-                logger.info("Nowych ogloszen: %d | Nastepne: %s",
+                logger.info("New listings: %d | Next scan: %s",
                             nowe, nastepne.strftime("%d.%m.%Y %H:%M"))
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             save_seen(seen_path, seen)
-            logger.info("Zatrzymano. Pamiec zapisana.")
+            logger.info("Stopped. Cache saved.")
     else:
         try:
             nowe = scrape_once(CONFIG, seen)
         finally:
             save_seen(seen_path, seen)
-        logger.info("Gotowe. Nowych: %d | Lacznie zapamiętanych: %d",
+        logger.info("Done. New: %d | Total seen: %d",
                     nowe, len(seen))
 
 

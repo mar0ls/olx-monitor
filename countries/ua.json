@@ -1,0 +1,89 @@
+{
+  "domain": "www.olx.ua",
+  "listing_path": "/nedvizhimost/kvartiry/dolgosrochnaya-arenda-kvartir/{city}/",
+  "currency": "UAH",
+  "currency_symbols": ["грн", "грн.", "uah"],
+  "note": "To find a district_id: open OLX, select a district in filters, copy search[district_id] from the URL.",
+  "cities": {
+    "kiev": {
+      "display": "Kyiv",
+      "districts": {}
+    },
+    "kharkov": {
+      "display": "Kharkiv",
+      "districts": {}
+    },
+    "dnipro": {
+      "display": "Dnipro",
+      "districts": {}
+    },
+    "odessa": {
+      "display": "Odesa",
+      "districts": {}
+    },
+    "lvov": {
+      "display": "Lviv",
+      "districts": {}
+    },
+    "zaporizhzhya": {
+      "display": "Zaporizhzhia",
+      "districts": {}
+    },
+    "nikolaev": {
+      "display": "Mykolaiv",
+      "districts": {}
+    },
+    "vinnitsa": {
+      "display": "Vinnytsia",
+      "districts": {}
+    },
+    "poltava": {
+      "display": "Poltava",
+      "districts": {}
+    },
+    "sumy": {
+      "display": "Sumy",
+      "districts": {}
+    },
+    "cherkasy": {
+      "display": "Cherkasy",
+      "districts": {}
+    },
+    "chernigov": {
+      "display": "Chernihiv",
+      "districts": {}
+    },
+    "kherson": {
+      "display": "Kherson",
+      "districts": {}
+    },
+    "lutsk": {
+      "display": "Lutsk",
+      "districts": {}
+    },
+    "rivne": {
+      "display": "Rivne",
+      "districts": {}
+    },
+    "ternopol": {
+      "display": "Ternopil",
+      "districts": {}
+    },
+    "ivano-frankovsk": {
+      "display": "Ivano-Frankivsk",
+      "districts": {}
+    },
+    "khmelnitskiy": {
+      "display": "Khmelnytskyi",
+      "districts": {}
+    },
+    "chernivtsi": {
+      "display": "Chernivtsi",
+      "districts": {}
+    },
+    "zaporozhe": {
+      "display": "Zaporizhzhia (alt)",
+      "districts": {}
+    }
+  }
+}
