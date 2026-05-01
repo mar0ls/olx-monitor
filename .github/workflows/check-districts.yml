@@ -46,16 +46,24 @@ jobs:
           git add olx_scraper.py README.md
           git commit -m "auto: aktualizacja district_id i README"
 
-          # Oblicz nowy tag (bump patch np. v1.2.3 → v1.2.4)
+          # Oblicz nowy tag (bump patch np. v1.2.3 → v1.2.4), znajdź wolny tag
           LAST=$(git tag --sort=-version:refname | head -1)
           if [ -z "$LAST" ]; then
             NEW="v1.0.1"
           else
-            NEW=$(python -c "
-          v = '$LAST'.lstrip('v').split('.')
-          v[2] = str(int(v[2]) + 1)
-          print('v' + '.'.join(v))
-          ")
+            v1=$(echo "$LAST" | cut -d. -f1 | sed 's/v//')
+            v2=$(echo "$LAST" | cut -d. -f2)
+            v3=$(echo "$LAST" | cut -d. -f3)
+            while true; do
+              v3=$((v3 + 1))
+              NEW="v${v1}.${v2}.${v3}"
+              # Sprawdź czy tag istnieje zdalnie
+              if git ls-remote --tags origin | grep -q "refs/tags/$NEW"; then
+                continue
+              else
+                break
+              fi
+            done
           fi
 
           echo "Stary tag: $LAST  →  Nowy tag: $NEW"
