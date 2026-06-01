@@ -46,8 +46,8 @@ jobs:
           git add olx_scraper.py README.md
           git commit -m "auto: aktualizacja district_id i README"
 
-          # Oblicz nowy tag (bump patch np. v1.2.3 → v1.2.4), znajdź wolny tag
-          LAST=$(git tag --sort=-version:refname | head -1)
+          # Pobierz ostatni tag ze zdalnego repozytorium (nie lokalnego)
+          LAST=$(git ls-remote --tags origin | grep -oE 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's|refs/tags/||' | sort -V | tail -1)
           if [ -z "$LAST" ]; then
             NEW="v1.0.1"
           else
@@ -57,8 +57,8 @@ jobs:
             while true; do
               v3=$((v3 + 1))
               NEW="v${v1}.${v2}.${v3}"
-              # Sprawdź czy tag istnieje zdalnie
-              if git ls-remote --tags origin | grep -q "refs/tags/$NEW"; then
+              # Sprawdź czy tag już istnieje zdalnie
+              if git ls-remote --tags origin | grep -q "refs/tags/$NEW$"; then
                 continue
               else
                 break
