@@ -128,24 +128,24 @@ Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłos
 
 ## Obsługiwane miasta i dzielnice
 
-Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (czerwiec 2026).
+Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (lipiec 2026).
 W GUI dzielnica wybierana jest z listy rozwijanej wypełnianej automatycznie po wpisaniu miasta.
 Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toruń, Kielce, Opole, Olsztyn, Zielona Góra) scraper przeszukuje całe miasto.
 
 | Miasto | Klucz URL | Liczba dzielnic |
 |--------|-----------|----------------|
-| Warszawa | `warszawa` | 18 |
-| Kraków | `krakow` | 18 |
-| Wrocław | `wroclaw` | 6 |
-| Poznań | `poznan` | 28 |
-| Gdańsk | `gdansk` | 29 |
-| Gdynia | `gdynia` | 21 |
-| Sopot | `sopot` | 3 |
+| Warszawa | `warszawa` | 17 |
+| Kraków | `krakow` | 17 |
+| Wrocław | `wroclaw` | 5 |
+| Poznań | `poznan` | 18 |
+| Gdańsk | `gdansk` | 11 |
+| Gdynia | `gdynia` | 7 |
+| Sopot | `sopot` | 1 |
 | Łódź | `lodz` | 5 |
-| Katowice | `katowice` | 22 |
-| Szczecin | `szczecin` | 16 |
-| Białystok | `bialystok` | 27 |
-| Częstochowa | `czestochowa` | 17 |
+| Katowice | `katowice` | 10 |
+| Szczecin | `szczecin` | 5 |
+| Białystok | `bialystok` | 8 |
+| Częstochowa | `czestochowa` | 5 |
 
 ### Przykłady district_id (Warszawa)
 
