@@ -19,6 +19,8 @@
 
 Monitor ogłoszeń o wynajmie mieszkań z OLX.pl z powiadomieniami przez iMessage, e-mail lub zapis do pliku. Działa w trybie CLI (terminal) i GUI (aplikacja desktopowa PyQt6).
 
+Wersja mobilna dla Androida jest dostępna do pobrania jako APK: [olx-monitor-mobile-1.0.0.apk](downloads/olx-monitor-mobile-1.0.0.apk).
+
 ## Funkcje
 
 - Przeszukuje wiele stron wyników OLX z filtrami ceny i metrażu
