@@ -21,7 +21,7 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - run: pip install requests beautifulsoup4
+      - run: pip install requests beautifulsoup4 curl_cffi
 
       - name: Pobierz district_id z OLX i porównaj
         id: update
