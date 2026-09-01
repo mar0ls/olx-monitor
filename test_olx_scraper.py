@@ -660,9 +660,9 @@ class TestFetchPage:
         assert result is None
 
     def test_logs_real_status_code_on_http_error(self, caplog):
-        """Response 4xx jest falsy (Response.__bool__ == .ok), więc kod statusu
-        trzeba sprawdzać przez `is not None` — inaczej w logu ląduje '?'."""
+        """Response 4xx jest falsy (Response.__bool__ == .ok), stąd `is not None`."""
         import logging
+
         import requests as req_lib
 
         err_resp = req_lib.Response()
@@ -1259,9 +1259,8 @@ class TestOtodomScraper:
 # ─────────────────────────────────────────────────────────────
 
 class TestHttpClient:
-    def test_odrzuca_naglowki_odciskowe(self):
-        """Ręczny User-Agent/Accept-Encoding rozjeżdża się z odciskiem TLS
-        profilu impersonate, więc http_client musi je odfiltrować."""
+    def test_drops_fingerprint_headers(self):
+        """Ręczne nagłówki rozjeżdżają się z odciskiem TLS profilu impersonate."""
         captured = {}
 
         def fake_get(url, headers=None, timeout=None, impersonate=None):
@@ -1284,7 +1283,7 @@ class TestHttpClient:
         assert captured["X-Custom"] == "zachowany"
         assert captured["Accept-Language"].startswith("pl-PL")
 
-    def test_uzywa_profilu_impersonate(self):
+    def test_uses_impersonate_profile(self):
         with patch.object(http_client, "HAS_CURL_CFFI", True), \
              patch.object(http_client, "_curl") as mock_curl:
             mock_curl.get.return_value = MagicMock(status_code=200)
@@ -1293,8 +1292,8 @@ class TestHttpClient:
         profil = mock_curl.get.call_args.kwargs["impersonate"]
         assert profil in http_client._IMPERSONATE_PROFILES
 
-    def test_fallback_na_requests_bez_curl_cffi(self):
-        """Bez curl_cffi ręczne nagłówki mają sens i muszą przejść."""
+    def test_falls_back_to_requests_without_curl_cffi(self):
+        """Bez podszywania się ręczne nagłówki mają sens i muszą przejść."""
         with patch.object(http_client, "HAS_CURL_CFFI", False), \
              patch("http_client.requests.get") as mock_get:
             mock_get.return_value = MagicMock(status_code=200)
@@ -1303,9 +1302,8 @@ class TestHttpClient:
         wyslane = mock_get.call_args.kwargs["headers"]
         assert wyslane["User-Agent"] == "x/1.0"
 
-    def test_raise_for_status_podnosi_requests_httperror(self):
-        """Kod scraperów łapie requests.HTTPError — adapter musi tłumaczyć
-        wyjątek curl_cffi na ten typ, z ustawionym .response."""
+    def test_raise_for_status_raises_requests_httperror(self):
+        """Scrapery łapią requests.HTTPError, więc adapter musi tłumaczyć typ wyjątku."""
         import requests as req_lib
 
         resp = MagicMock(status_code=403, url="https://example.com")
@@ -1316,11 +1314,11 @@ class TestHttpClient:
         assert exc.value.response is not None
         assert exc.value.response.status_code == 403
 
-    def test_raise_for_status_przepuszcza_200(self):
+    def test_raise_for_status_passes_200(self):
         resp = MagicMock(status_code=200, url="https://example.com")
         assert http_client._CurlResponseAdapter(resp).raise_for_status() is None
 
-    def test_blad_sieci_jako_requests_exception(self):
+    def test_network_error_as_requests_exception(self):
         import requests as req_lib
         from curl_cffi.requests import exceptions as curl_exc
 

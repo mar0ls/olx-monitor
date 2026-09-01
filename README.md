@@ -130,7 +130,7 @@ Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłos
 
 ## Obsługiwane miasta i dzielnice
 
-Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (wrzesień 2026).
+Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (1 września 2026).
 W GUI dzielnica wybierana jest z listy rozwijanej wypełnianej automatycznie po wpisaniu miasta.
 Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toruń, Kielce, Opole, Olsztyn, Zielona Góra) scraper przeszukuje całe miasto.
 
