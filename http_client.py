@@ -28,20 +28,14 @@ except ImportError:  # pragma: no cover - zależy od środowiska
     _curl_exc = None
     HAS_CURL_CFFI = False
 
-# Profile przeglądarek do podszywania się (odcisk TLS + komplet nagłówków).
-# curl_cffi sam wysyła spójny zestaw Sec-Ch-Ua / Sec-Fetch-* / Accept-Encoding
-# pasujący do profilu — NIE nadpisujemy tu User-Agenta, bo rozjechanie UA
-# z odciskiem TLS to klasyczny sygnał bota.
+# Profile przeglądarek do podszywania się pod odcisk TLS.
 _IMPERSONATE_PROFILES = ["chrome", "safari", "firefox"]
 
-# Jedyny nagłówek, który dokładamy: zmienia język TREŚCI na polskiej stronie,
-# a nie odcisk klienta.
+# Zmienia język treści na polskiej stronie, nie odcisk klienta.
 _EXTRA_HEADERS = {"Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7"}
 
-# Nagłówki należące do odcisku przeglądarki. Przy backendzie curl_cffi ustawia
-# je profil impersonate i są spójne z odciskiem TLS — ręczne wersje od wywołującego
-# są starsze/uboższe (np. "gzip, deflate" zamiast "gzip, deflate, br, zstd")
-# i rozjeżdżają odcisk, więc je odrzucamy.
+# Te nagłówki ustawia profil impersonate, spójnie z odciskiem TLS. Wersje od
+# wywołującego bywają starsze (np. bez br/zstd) i rozjeżdżają odcisk z UA.
 _FINGERPRINT_HEADERS = {
     "user-agent", "accept", "accept-encoding", "connection", "dnt",
     "upgrade-insecure-requests", "priority",
@@ -51,11 +45,11 @@ _FINGERPRINT_HEADERS = {
 
 
 class _CurlResponseAdapter:
-    """Opakowuje odpowiedź curl_cffi tak, by zachowywała się jak requests.Response.
+    """Odpowiedź curl_cffi w interfejsie requests.Response.
 
-    Kluczowe: `raise_for_status()` podnosi `requests.HTTPError` (nie wyjątek
-    curl_cffi) z ustawionym `.response`, żeby istniejące `except requests.HTTPError`
-    w scraperach działało bez zmian.
+    `raise_for_status()` podnosi `requests.HTTPError` z ustawionym `.response`,
+    nie wyjątek curl_cffi, żeby `except requests.HTTPError` w scraperach
+    działało bez zmian.
     """
 
     def __init__(self, resp):
@@ -81,7 +75,7 @@ def get(url: str, headers: dict | None = None, timeout: int = 15):
     zwykłym `requests.get`.
     """
     if not HAS_CURL_CFFI:
-        # Fallback bez podszywania się — tu ręczne nagłówki pomagają, więc je zostawiamy.
+        # Bez podszywania się ręczne nagłówki pomagają, więc je zostawiamy.
         merged = dict(_EXTRA_HEADERS)
         if headers:
             merged.update(headers)
@@ -102,7 +96,7 @@ def get(url: str, headers: dict | None = None, timeout: int = 15):
             impersonate=random.choice(_IMPERSONATE_PROFILES),
         )
     except _curl_exc.CurlError as e:
-        # Normalizacja: kod wywołujący łapie requests.RequestException
+        # Kod wywołujący łapie wyjątki requests, nie curl_cffi.
         raise requests.RequestException(str(e)) from e
 
     return _CurlResponseAdapter(resp)

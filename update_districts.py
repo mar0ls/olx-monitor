@@ -85,6 +85,9 @@ def main() -> int:
 
     if not changed:
         print("Brak zmian w district_id.")
+        # Data w README to data ostatniej weryfikacji, nie ostatniej zmiany.
+        if _update_readme(current):
+            return 1
         return 0
 
     print(f"Zmiany w: {', '.join(changed)}")
@@ -127,17 +130,20 @@ def main() -> int:
     return 1
 
 
-def _update_readme(districts: dict[str, dict[str, int]]) -> None:
+def _update_readme(districts: dict[str, dict[str, int]]) -> bool:
+    """Aktualizuje datę weryfikacji i liczby dzielnic. Zwraca True, gdy plik się zmienił."""
     if not README_FILE.exists():
-        return
+        return False
 
     readme = README_FILE.read_text(encoding="utf-8")
+    original = readme
+    # Dopełniacz, bo data czytana jest jako "1 września 2026", nie "1 wrzesień 2026".
     month_pl = [
-        "", "styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec",
-        "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień",
+        "", "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca",
+        "lipca", "sierpnia", "września", "października", "listopada", "grudnia",
     ]
     now = datetime.now()
-    date_str = f"{month_pl[now.month]} {now.year}"
+    date_str = f"{now.day} {month_pl[now.month]} {now.year}"
 
     # Zaktualizuj datę w nagłówku sekcji
     readme = re.sub(
@@ -156,8 +162,12 @@ def _update_readme(districts: dict[str, dict[str, int]]) -> None:
                 readme,
             )
 
+    if readme == original:
+        return False
+
     README_FILE.write_text(readme, encoding="utf-8")
     print("Zaktualizowano README.md (liczby dzielnic i data).")
+    return True
 
 
 if __name__ == "__main__":
