@@ -8,6 +8,7 @@ Uruchomienie:
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1327,3 +1328,165 @@ class TestHttpClient:
             mock_curl.get.side_effect = curl_exc.ConnectionError("brak sieci")
             with pytest.raises(req_lib.RequestException):
                 http_client.get("https://example.com")
+
+
+# ─────────────────────────────────────────────────────────────
+#  update_districts – kody wyjścia (kontrakt dla check-districts.yml)
+# ─────────────────────────────────────────────────────────────
+
+class TestUpdateDistrictsExitCodes:
+    def test_blocked_olx_returns_exit_2(self):
+        """Żadne miasto nie zwróciło danych — przejściowa blokada, nie błąd repo."""
+        import update_districts
+
+        with patch("update_districts.fetch_districts", return_value={}), \
+             patch("update_districts.time.sleep"):
+            assert update_districts.main() == 2
+
+    def test_no_changes_returns_exit_0(self, tmp_path, monkeypatch):
+        import olx_scraper
+        import update_districts
+
+        monkeypatch.setattr(update_districts, "README_FILE", tmp_path / "brak.md")
+        aktualne = olx_scraper.CITY_DISTRICT_DISPLAY
+
+        with patch("update_districts.fetch_districts", side_effect=lambda c: dict(aktualne.get(c, {}))), \
+             patch("update_districts.time.sleep"):
+            assert update_districts.main() == 0
+
+    def test_missing_dict_block_returns_exit_3(self, tmp_path, monkeypatch):
+        """Brak CITY_DISTRICT_DISPLAY to błąd kodu, nie blokada — musi być odróżnialny."""
+        import update_districts
+
+        podmieniony = tmp_path / "olx_scraper.py"
+        podmieniony.write_text("# bez bloku z dzielnicami\n", encoding="utf-8")
+        monkeypatch.setattr(update_districts, "SCRAPER_FILE", podmieniony)
+        monkeypatch.setattr(update_districts, "README_FILE", tmp_path / "brak.md")
+
+        with patch("update_districts.fetch_districts", return_value={"Nowa": 1}), \
+             patch("update_districts.time.sleep"):
+            assert update_districts.main() == 3
+
+
+# ─────────────────────────────────────────────────────────────
+#  update_districts._update_readme – data weryfikacji i liczby
+# ─────────────────────────────────────────────────────────────
+
+README_TEMPLATE = """# Tytuł
+
+Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (kwiecień 2020).
+
+| Miasto | Klucz | Dzielnic |
+|---|---|---|
+| Warszawa | `warszawa` | 1 |
+| Gdańsk | `gdansk` | 2 |
+"""
+
+
+class TestUpdateReadme:
+    def _readme(self, tmp_path, monkeypatch):
+        import update_districts
+
+        plik = tmp_path / "README.md"
+        plik.write_text(README_TEMPLATE, encoding="utf-8")
+        monkeypatch.setattr(update_districts, "README_FILE", plik)
+        return plik
+
+    def test_writes_full_date_in_genitive(self, tmp_path, monkeypatch):
+        import update_districts
+
+        plik = self._readme(tmp_path, monkeypatch)
+        assert update_districts._update_readme({"warszawa": {"A": 1}}) is True
+
+        tresc = plik.read_text(encoding="utf-8")
+        teraz = datetime.now()
+        miesiace = ["", "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca",
+                    "lipca", "sierpnia", "września", "października", "listopada", "grudnia"]
+        assert f"({teraz.day} {miesiace[teraz.month]} {teraz.year})" in tresc
+        assert "kwiecień 2020" not in tresc
+
+    def test_updates_district_counts(self, tmp_path, monkeypatch):
+        import update_districts
+
+        plik = self._readme(tmp_path, monkeypatch)
+        update_districts._update_readme({"warszawa": {"A": 1, "B": 2, "C": 3}, "gdansk": {"X": 9}})
+
+        tresc = plik.read_text(encoding="utf-8")
+        assert "| Warszawa | `warszawa` | 3 |" in tresc
+        assert "| Gdańsk | `gdansk` | 1 |" in tresc
+
+    def test_returns_false_when_nothing_changes(self, tmp_path, monkeypatch):
+        """Drugie wywołanie tego samego dnia nie może generować pustego commita."""
+        import update_districts
+
+        self._readme(tmp_path, monkeypatch)
+        assert update_districts._update_readme({"warszawa": {"A": 1}}) is True
+        assert update_districts._update_readme({"warszawa": {"A": 1}}) is False
+
+    def test_returns_false_when_file_missing(self, tmp_path, monkeypatch):
+        import update_districts
+
+        monkeypatch.setattr(update_districts, "README_FILE", tmp_path / "nie_ma.md")
+        assert update_districts._update_readme({"warszawa": {"A": 1}}) is False
+
+
+# ─────────────────────────────────────────────────────────────
+#  miner_id.fetch_districts – parsowanie district_id
+# ─────────────────────────────────────────────────────────────
+
+class TestFetchDistricts:
+    def _response(self, html):
+        resp = MagicMock()
+        resp.text = html
+        resp.raise_for_status.return_value = None
+        return resp
+
+    def test_parses_district_id_and_strips_listing_count(self):
+        import miner_id
+
+        html = """<html><body>
+            <a href="/x?search%5Bdistrict_id%5D=353">Mokotów (49)</a>
+            <a href="/x?search[district_id]=367">Bemowo</a>
+            <a href="/x?brak=1">Nie dzielnica</a>
+        </body></html>"""
+
+        with patch("miner_id.http_client.get", return_value=self._response(html)):
+            assert miner_id.fetch_districts("warszawa") == {"Mokotów": 353, "Bemowo": 367}
+
+    def test_skips_empty_labels(self):
+        import miner_id
+
+        html = '<html><body><a href="?search%5Bdistrict_id%5D=1">   </a></body></html>'
+        with patch("miner_id.http_client.get", return_value=self._response(html)):
+            assert miner_id.fetch_districts("warszawa") == {}
+
+    def test_returns_empty_on_403(self, capsys):
+        """Blokada OLX ma dać pusty wynik i wypisać prawdziwy kod, nie '?'."""
+        import requests as req_lib
+
+        import miner_id
+
+        err = req_lib.Response()
+        err.status_code = 403
+        resp = MagicMock()
+        resp.raise_for_status.side_effect = req_lib.HTTPError("403", response=err)
+
+        with patch("miner_id.http_client.get", return_value=resp):
+            assert miner_id.fetch_districts("warszawa") == {}
+        assert "[HTTP 403]" in capsys.readouterr().err
+
+    def test_returns_empty_on_network_error(self):
+        import requests as req_lib
+
+        import miner_id
+
+        with patch("miner_id.http_client.get", side_effect=req_lib.RequestException("timeout")):
+            assert miner_id.fetch_districts("warszawa") == {}
+
+
+class TestCurlResponseAdapterDelegation:
+    def test_delegates_attributes_to_wrapped_response(self):
+        resp = MagicMock(status_code=200, text="tresc", url="https://example.com")
+        adapter = http_client._CurlResponseAdapter(resp)
+        assert adapter.text == "tresc"
+        assert adapter.status_code == 200

@@ -29,7 +29,7 @@ jobs:
         run: pip install requests beautifulsoup4 curl_cffi pytest pytest-cov ruff
 
       - name: Ruff (lint)
-        run: ruff check olx_scraper.py olx_gui.py otodom_scraper.py update_districts.py miner_id.py
+        run: ruff check olx_scraper.py olx_gui.py otodom_scraper.py update_districts.py miner_id.py http_client.py
 
       - name: Uruchom testy z pokryciem
-        run: pytest test_olx_scraper.py -v --tb=short --cov=olx_scraper --cov=otodom_scraper --cov-report=term-missing --cov-fail-under=80
+        run: pytest test_olx_scraper.py -v --tb=short --cov=olx_scraper --cov=otodom_scraper --cov=http_client --cov=update_districts --cov=miner_id --cov-report=term-missing --cov-fail-under=80
