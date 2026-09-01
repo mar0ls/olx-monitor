@@ -11,8 +11,10 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from bs4 import BeautifulSoup
 
+import http_client
 import olx_scraper as scraper
 import otodom_scraper
 
@@ -634,7 +636,7 @@ class TestFetchPage:
         mock_resp.text = html
         mock_resp.raise_for_status.return_value = None
 
-        with patch("olx_scraper.requests.get", return_value=mock_resp):
+        with patch("olx_scraper.http_client.get", return_value=mock_resp):
             result = scraper.fetch_page("https://www.olx.pl/test")
 
         assert result is not None
@@ -642,7 +644,7 @@ class TestFetchPage:
 
     def test_returns_none_on_request_exception(self):
         import requests as req_lib
-        with patch("olx_scraper.requests.get", side_effect=req_lib.RequestException("timeout")):
+        with patch("olx_scraper.http_client.get", side_effect=req_lib.RequestException("timeout")):
             result = scraper.fetch_page("https://www.olx.pl/test")
 
         assert result is None
@@ -652,10 +654,29 @@ class TestFetchPage:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = req_lib.HTTPError("404")
 
-        with patch("olx_scraper.requests.get", return_value=mock_resp):
+        with patch("olx_scraper.http_client.get", return_value=mock_resp):
             result = scraper.fetch_page("https://www.olx.pl/test")
 
         assert result is None
+
+    def test_logs_real_status_code_on_http_error(self, caplog):
+        """Response 4xx jest falsy (Response.__bool__ == .ok), więc kod statusu
+        trzeba sprawdzać przez `is not None` — inaczej w logu ląduje '?'."""
+        import logging
+        import requests as req_lib
+
+        err_resp = req_lib.Response()
+        err_resp.status_code = 403
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = req_lib.HTTPError("403", response=err_resp)
+
+        with caplog.at_level(logging.ERROR, logger="olx_scraper"):
+            with patch("olx_scraper.http_client.get", return_value=mock_resp):
+                result = scraper.fetch_page("https://www.olx.pl/test")
+
+        assert result is None
+        assert "403" in caplog.text
+        assert "?" not in caplog.text
 
 
 # ─────────────────────────────────────────────────────────────
@@ -669,7 +690,7 @@ class TestFetchDetail:
         mock_resp.text = html
         mock_resp.raise_for_status.return_value = None
 
-        with patch("olx_scraper.requests.get", return_value=mock_resp):
+        with patch("olx_scraper.http_client.get", return_value=mock_resp):
             desc, structured = scraper.fetch_detail("https://www.olx.pl/oferta/test.html")
 
         assert "400" in desc
@@ -678,7 +699,7 @@ class TestFetchDetail:
 
     def test_returns_empty_on_error(self):
         import requests as req_lib
-        with patch("olx_scraper.requests.get", side_effect=req_lib.RequestException):
+        with patch("olx_scraper.http_client.get", side_effect=req_lib.RequestException):
             desc, structured = scraper.fetch_detail("https://www.olx.pl/oferta/test.html")
 
         assert desc == ""
@@ -690,7 +711,7 @@ class TestFetchDetail:
         mock_resp.text = html
         mock_resp.raise_for_status.return_value = None
 
-        with patch("olx_scraper.requests.get", return_value=mock_resp):
+        with patch("olx_scraper.http_client.get", return_value=mock_resp):
             desc, _ = scraper.fetch_detail("https://www.olx.pl/oferta/test.html")
 
         assert "media wliczone" in desc
@@ -705,7 +726,7 @@ class TestFetchDetail:
         mock_resp.text = html
         mock_resp.raise_for_status.return_value = None
 
-        with patch("olx_scraper.requests.get", return_value=mock_resp):
+        with patch("olx_scraper.http_client.get", return_value=mock_resp):
             desc, structured = scraper.fetch_detail("https://www.olx.pl/oferta/test.html")
 
         assert structured == 967
@@ -1231,3 +1252,80 @@ class TestOtodomScraper:
             desc, rent = otodom_scraper.fetch_otodom_detail("https://www.otodom.pl/pl/oferta/test.html")
         assert desc == ""
         assert rent == 0
+
+
+# ─────────────────────────────────────────────────────────────
+#  http_client – warstwa podszywania się pod przeglądarkę
+# ─────────────────────────────────────────────────────────────
+
+class TestHttpClient:
+    def test_odrzuca_naglowki_odciskowe(self):
+        """Ręczny User-Agent/Accept-Encoding rozjeżdża się z odciskiem TLS
+        profilu impersonate, więc http_client musi je odfiltrować."""
+        captured = {}
+
+        def fake_get(url, headers=None, timeout=None, impersonate=None):
+            captured.update(headers or {})
+            return MagicMock(status_code=200)
+
+        with patch.object(http_client, "HAS_CURL_CFFI", True), \
+             patch.object(http_client, "_curl") as mock_curl:
+            mock_curl.get.side_effect = fake_get
+            http_client.get("https://example.com", headers={
+                "User-Agent": "stary-bot/1.0",
+                "Accept-Encoding": "gzip, deflate",
+                "Accept": "text/html",
+                "X-Custom": "zachowany",
+            })
+
+        assert "User-Agent" not in captured
+        assert "Accept-Encoding" not in captured
+        assert "Accept" not in captured
+        assert captured["X-Custom"] == "zachowany"
+        assert captured["Accept-Language"].startswith("pl-PL")
+
+    def test_uzywa_profilu_impersonate(self):
+        with patch.object(http_client, "HAS_CURL_CFFI", True), \
+             patch.object(http_client, "_curl") as mock_curl:
+            mock_curl.get.return_value = MagicMock(status_code=200)
+            http_client.get("https://example.com")
+
+        profil = mock_curl.get.call_args.kwargs["impersonate"]
+        assert profil in http_client._IMPERSONATE_PROFILES
+
+    def test_fallback_na_requests_bez_curl_cffi(self):
+        """Bez curl_cffi ręczne nagłówki mają sens i muszą przejść."""
+        with patch.object(http_client, "HAS_CURL_CFFI", False), \
+             patch("http_client.requests.get") as mock_get:
+            mock_get.return_value = MagicMock(status_code=200)
+            http_client.get("https://example.com", headers={"User-Agent": "x/1.0"})
+
+        wyslane = mock_get.call_args.kwargs["headers"]
+        assert wyslane["User-Agent"] == "x/1.0"
+
+    def test_raise_for_status_podnosi_requests_httperror(self):
+        """Kod scraperów łapie requests.HTTPError — adapter musi tłumaczyć
+        wyjątek curl_cffi na ten typ, z ustawionym .response."""
+        import requests as req_lib
+
+        resp = MagicMock(status_code=403, url="https://example.com")
+        adapter = http_client._CurlResponseAdapter(resp)
+
+        with pytest.raises(req_lib.HTTPError) as exc:
+            adapter.raise_for_status()
+        assert exc.value.response is not None
+        assert exc.value.response.status_code == 403
+
+    def test_raise_for_status_przepuszcza_200(self):
+        resp = MagicMock(status_code=200, url="https://example.com")
+        assert http_client._CurlResponseAdapter(resp).raise_for_status() is None
+
+    def test_blad_sieci_jako_requests_exception(self):
+        import requests as req_lib
+        from curl_cffi.requests import exceptions as curl_exc
+
+        with patch.object(http_client, "HAS_CURL_CFFI", True), \
+             patch.object(http_client, "_curl") as mock_curl:
+            mock_curl.get.side_effect = curl_exc.ConnectionError("brak sieci")
+            with pytest.raises(req_lib.RequestException):
+                http_client.get("https://example.com")

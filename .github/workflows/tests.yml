@@ -26,7 +26,7 @@ jobs:
           cache: pip
 
       - name: Zainstaluj zależności
-        run: pip install requests beautifulsoup4 pytest pytest-cov ruff
+        run: pip install requests beautifulsoup4 curl_cffi pytest pytest-cov ruff
 
       - name: Ruff (lint)
         run: ruff check olx_scraper.py olx_gui.py otodom_scraper.py update_districts.py miner_id.py

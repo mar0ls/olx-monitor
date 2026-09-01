@@ -26,6 +26,8 @@ from typing import Any, TypedDict
 import requests
 from bs4 import BeautifulSoup
 
+import http_client
+
 logger = logging.getLogger(__name__)
 
 # Stałe
@@ -261,7 +263,6 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
         "Chełm z dzielnicą Gdańsk Południe": 93,
         "Jasień": 691,
         "Kokoszki": 423,
-        "Krakowiec - Górki Zachodnie": 129,
         "Letnica": 123,
         "Matarnia": 105,
         "Młyniska": 137,
@@ -280,6 +281,7 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
         "Ujeścisko - Łostowice": 770,
         "VII Dwór": 107,
         "Wrzeszcz": 99,
+        "Wyspa Sobieszewska": 499,
         "Wzgórze Mickiewicza": 421,
         "Zaspa Młyniec": 121,
         "Zaspa Rozstaje": 117,
@@ -340,7 +342,6 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
         "Podlesie": 511,
         "Szopienice-Burowiec": 227,
         "Wełnowiec-Józefowiec": 219,
-        "Zarzecze": 239,
         "Zawodzie": 213,
         "Załęska Hałda-Brynów cz. Zach.": 233,
         "Załęże": 245,
@@ -353,15 +354,13 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
         "Dąbie": 733,
         "Golęcino": 757,
         "Gumieńce": 735,
-        "Kijewo": 737,
         "Krzekowo": 739,
-        "Majowe": 741,
         "Niebuszewo": 743,
         "Pogodno": 745,
         "Pomorzany": 747,
-        "Płonia-Śmierdnica-Jezierzyce": 772,
         "Słoneczne": 749,
         "Warszewo": 751,
+        "Wielgowo-Sławociesze-Zdunowo": 773,
         "Zdroje": 753,
         "Świerczewo": 759,
     },
@@ -398,7 +397,6 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
     "czestochowa": {
         "Błeszno": 415,
         "Grabówka": 81,
-        "Kawodrza": 665,
         "Kiedrzyn": 407,
         "Lisiniec": 71,
         "Mirów": 551,
@@ -477,11 +475,11 @@ def build_url(config: dict, page: int = 1) -> str:
 
 def fetch_page(url: str) -> BeautifulSoup | None:
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except requests.HTTPError as e:
-        logger.error("Błąd HTTP %s dla %s", e.response.status_code if e.response else "?", url)
+        logger.error("Błąd HTTP %s dla %s", e.response.status_code if e.response is not None else "?", url)
         return None
     except requests.RequestException as e:
         logger.error("Nie można pobrać strony %s: %s", url, e)
@@ -619,7 +617,7 @@ def fetch_detail(url: str) -> tuple[str, int]:
         oraz kwotę z pola "Czynsz (dodatkowo)" z sidebara OLX (0 jeśli brak).
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
