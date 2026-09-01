@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Test before release
@@ -21,11 +25,15 @@ jobs:
     steps:
       - uses: cicd-sensor/cicd-sensor-action@2b76335ff1c2dd298e983961f7a200d3fe9076c2 # v0.0.36
       - uses: actions/checkout@v4
+        with:
+          # Przy ręcznym backfillu buduj wskazany tag, a nie bieżący main.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - run: pip install requests beautifulsoup4 curl_cffi pytest
-      - run: pytest test_olx_scraper.py -v --tb=short
+      - run: pytest -v --tb=short
 
   build:
     name: Build – ${{ matrix.os }}
@@ -47,7 +55,21 @@ jobs:
       - uses: cicd-sensor/cicd-sensor-action@2b76335ff1c2dd298e983961f7a200d3fe9076c2 # v0.0.36
         if: runner.os == 'Linux'
 
-      - uses: actions/checkout@v4
+      - name: Pobierz kod wydania
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Pobierz aktualne narzędzia release
+        uses: actions/checkout@v4
+        with:
+          # Workflow uruchomiony z main może dzięki temu poprawnie zbudować
+          # stary tag bez korzystania ze starego, wadliwego build_release.sh.
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          sparse-checkout: scripts/build_release.sh
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -69,7 +91,7 @@ jobs:
 
       - name: Build release artifact
         shell: bash
-        run: bash scripts/build_release.sh
+        run: SOURCE_ROOT="$GITHUB_WORKSPACE" bash .release-tooling/scripts/build_release.sh
 
       - name: Wgraj artefakt buildu
         uses: actions/upload-artifact@v4
