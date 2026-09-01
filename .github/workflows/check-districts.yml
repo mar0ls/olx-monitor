@@ -81,4 +81,8 @@ jobs:
 
       - name: Przestaw dev na main
         if: env.CHANGED == 'true'
-        run: bash scripts/sync_dev_with_main.sh
+        run: |
+          # Wcześniejszy krok przestawił origin na URL z PAT_TOKEN; dla pushu dev
+          # wystarczy GITHUB_TOKEN (contents: write) i nie wyzwala on kolejnych workflow.
+          git remote set-url origin "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
+          bash scripts/sync_dev_with_main.sh
