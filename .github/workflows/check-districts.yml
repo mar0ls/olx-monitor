@@ -32,8 +32,12 @@ jobs:
           set -e
           if   [ $EXIT -eq 0 ]; then echo "CHANGED=false" >> $GITHUB_ENV
           elif [ $EXIT -eq 1 ]; then echo "CHANGED=true"  >> $GITHUB_ENV
+          elif [ $EXIT -eq 2 ]; then
+            # Blokada OLX jest przejściowa i niezależna od repo — ostrzeżenie zamiast czerwieni.
+            echo "CHANGED=false" >> $GITHUB_ENV
+            echo "::warning::OLX zablokował runnera (403) — pominięto aktualizację district_id. Kolejna próba w następnym przebiegu."
           else
-            echo "Skrypt zakończył się błędem (kod $EXIT) — OLX prawdopodobnie zablokował runner."
+            echo "::error::update_districts.py zakończył się błędem (kod $EXIT)."
             exit 1
           fi
 

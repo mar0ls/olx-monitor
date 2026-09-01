@@ -3,7 +3,7 @@
 update_districts.py
 Porównuje aktualne district_id z OLX z wartościami w olx_scraper.py.
 Jeśli są różnice, aktualizuje CITY_DISTRICT_DISPLAY i wychodzi z kodem 1.
-Brak zmian → kod 0. Błąd sieci/parsowania → kod 2.
+Brak zmian → kod 0. Blokada OLX (przejściowa) → kod 2. Błąd kodu → kod 3.
 
 Używany przez GitHub Action check-districts.yml.
 """
@@ -121,7 +121,7 @@ def main() -> int:
 
     if patched == source:
         print("ERR: nie znaleziono bloku CITY_DISTRICT_DISPLAY w pliku.", file=sys.stderr)
-        return 2
+        return 3
 
     SCRAPER_FILE.write_text(patched, encoding="utf-8")
     print("Zaktualizowano olx_scraper.py.")
