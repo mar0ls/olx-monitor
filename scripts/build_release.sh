@@ -2,13 +2,19 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -n "${SOURCE_ROOT:-}" ]; then
+  ROOT_DIR="$(cd "$SOURCE_ROOT" && pwd)"
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 DIST_DIR="${DIST_DIR:-$ROOT_DIR/dist/release}"
 mkdir -p "$ROOT_DIR/build"
 WORK_ROOT="$(mktemp -d "$ROOT_DIR/build/release.XXXXXX")"
 TMP_DIST="$WORK_ROOT/dist"
 TMP_BUILD="$WORK_ROOT/build"
 TMP_SPEC="$WORK_ROOT/spec"
+PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$WORK_ROOT/pyinstaller-cache}"
+export PYINSTALLER_CONFIG_DIR
 
 cleanup() {
   if [ -d "$WORK_ROOT" ]; then
@@ -18,7 +24,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-mkdir -p "$DIST_DIR" "$TMP_DIST" "$TMP_BUILD" "$TMP_SPEC"
+mkdir -p "$DIST_DIR" "$TMP_DIST" "$TMP_BUILD" "$TMP_SPEC" "$PYINSTALLER_CONFIG_DIR"
 
 resolve_python() {
   if [ -n "${PYTHON_BIN:-}" ]; then
@@ -47,30 +53,6 @@ resolve_python() {
 PYTHON_CMD="$(resolve_python)"
 OS_NAME="$(uname -s)"
 
-ensure_ico() {
-  if [ -f "$ROOT_DIR/icon.ico" ]; then
-    return
-  fi
-
-  "$PYTHON_CMD" -c "from pathlib import Path; import sys; from PIL import Image; root = Path(sys.argv[1]); Image.open(root / 'assets' / 'icon.png').save(root / 'icon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])" "$ROOT_DIR"
-}
-
-ensure_icns() {
-  if [ -f "$ROOT_DIR/assets/icon.icns" ]; then
-    return
-  fi
-
-  local iconset_dir="$WORK_ROOT/icon.iconset"
-  mkdir -p "$iconset_dir"
-
-  for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$ROOT_DIR/assets/icon.png" --out "$iconset_dir/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" "$ROOT_DIR/assets/icon.png" --out "$iconset_dir/icon_${size}x${size}@2x.png" >/dev/null
-  done
-
-  iconutil -c icns "$iconset_dir" -o "$ROOT_DIR/assets/icon.icns"
-}
-
 build_with_pyinstaller() {
   "$PYTHON_CMD" -m PyInstaller "$@"
 }
@@ -95,12 +77,13 @@ ICON_PNG_DATA="$(add_data_arg "$ROOT_DIR/assets/icon.png" "assets")"
 
 case "$OS_NAME" in
   Darwin)
-    ensure_icns
+    # PyInstaller konwertuje PNG do ICNS przez Pillow. To omija wadliwy
+    # iconutil z macOS 26, który odrzuca nawet własny poprawny iconset.
     build_with_pyinstaller \
       --noconfirm \
       --windowed \
       --name olx-monitor \
-      --icon "$ROOT_DIR/assets/icon.icns" \
+      --icon "$ROOT_DIR/assets/icon.png" \
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \
@@ -121,12 +104,10 @@ case "$OS_NAME" in
     printf 'Built %s\n' "$DIST_DIR/olx-monitor-macos.zip"
     ;;
   Linux)
-    ensure_ico
     build_with_pyinstaller \
       --noconfirm \
       --onefile \
       --name olx-monitor \
-      --icon "$ROOT_DIR/icon.ico" \
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \
@@ -144,13 +125,13 @@ case "$OS_NAME" in
     printf 'Built %s\n' "$DIST_DIR/olx-monitor-linux"
     ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    ensure_ico
+    # Pillow (instalowany w release.yml) konwertuje PNG do ICO.
     build_with_pyinstaller \
       --noconfirm \
       --onefile \
       --windowed \
       --name olx-monitor \
-      --icon "$ROOT_DIR/icon.ico" \
+      --icon "$ROOT_DIR/assets/icon.png" \
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \

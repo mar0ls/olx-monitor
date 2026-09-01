@@ -10,11 +10,16 @@ jobs:
     runs-on: self-hosted
     permissions:
       contents: write
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-tags: true
+          fetch-depth: 0
+          # Push commita i tagu musi faktycznie używać PAT-u. Domyślny
+          # GITHUB_TOKEN nie wyzwala kolejnego workflow po git push.
+          token: ${{ secrets.PAT_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
@@ -30,23 +35,27 @@ jobs:
           python update_districts.py
           EXIT=$?
           set -e
-          if   [ $EXIT -eq 0 ]; then echo "CHANGED=false" >> $GITHUB_ENV
-          elif [ $EXIT -eq 1 ]; then echo "CHANGED=true"  >> $GITHUB_ENV
+          if [ $EXIT -eq 0 ]; then
+            echo "CHANGED=false" >> "$GITHUB_ENV"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          elif [ $EXIT -eq 1 ]; then
+            echo "CHANGED=true" >> "$GITHUB_ENV"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           elif [ $EXIT -eq 2 ]; then
             # Blokada OLX jest przejściowa i niezależna od repo — ostrzeżenie zamiast czerwieni.
-            echo "CHANGED=false" >> $GITHUB_ENV
+            echo "CHANGED=false" >> "$GITHUB_ENV"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::warning::OLX zablokował runnera (403) — pominięto aktualizację district_id. Kolejna próba w następnym przebiegu."
           else
             echo "::error::update_districts.py zakończył się błędem (kod $EXIT)."
             exit 1
           fi
 
-      - name: Commit, bump tag, usuń stary release
+      - name: Commit i bump tagu
         if: env.CHANGED == 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/mar0ls/olx-monitor.git
           git add olx_scraper.py README.md
           git commit -m "auto: aktualizacja district_id i README"
 
@@ -72,21 +81,25 @@ jobs:
 
           echo "Stary tag: $LAST  →  Nowy tag: $NEW"
 
-          # Usuń poprzedni GitHub Release (bez usuwania tagu git)
-          gh release delete "$LAST" --yes 2>/dev/null || true
-
           git push
           git tag "$NEW"
           git push origin "$NEW"
           # Nowy tag wyzwoli release.yml który zbuduje binarke
           # PAT_TOKEN wymagany — GITHUB_TOKEN nie wyzwala innych workflow
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      - name: Przestaw dev na main
-        if: env.CHANGED == 'true'
-        run: |
-          # Wcześniejszy krok przestawił origin na URL z PAT_TOKEN; dla pushu dev
-          # wystarczy GITHUB_TOKEN (contents: write) i nie wyzwala on kolejnych workflow.
-          git remote set-url origin "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git"
-          bash scripts/sync_dev_with_main.sh
+  sync-dev:
+    name: Przestaw dev na main
+    needs: [check]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: self-hosted
+    permissions:
+      contents: write
+
+    steps:
+      # Osobny checkout zapisuje GITHUB_TOKEN zamiast PAT-u. Push synchronizujący
+      # dev nie uruchamia dzięki temu kolejnego łańcucha workflow.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: bash scripts/sync_dev_with_main.sh
