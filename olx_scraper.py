@@ -100,16 +100,6 @@ CONFIG = {
 }
 # ─────────────────────────────────────────────────────────────
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "pl-PL,pl;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
 
 # ── Normalizacja i mapa dzielnic polskich miast ───────────────
 
@@ -475,7 +465,7 @@ def build_url(config: dict, page: int = 1) -> str:
 
 def fetch_page(url: str) -> BeautifulSoup | None:
     try:
-        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except requests.HTTPError as e:
@@ -617,7 +607,7 @@ def fetch_detail(url: str) -> tuple[str, int]:
         oraz kwotę z pola "Czynsz (dodatkowo)" z sidebara OLX (0 jeśli brak).
     """
     try:
-        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
