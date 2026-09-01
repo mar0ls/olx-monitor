@@ -34,6 +34,14 @@ def test_manual_release_checks_out_requested_tag():
     assert "SOURCE_ROOT=\"$GITHUB_WORKSPACE\" bash .release-tooling/scripts/build_release.sh" in workflow
 
 
+def test_publish_downloads_only_release_artifacts():
+    workflow = _read(".github/workflows/release.yml")
+
+    assert "uses: actions/download-artifact@v8" in workflow
+    assert "pattern: olx-monitor-*" in workflow
+    assert "merge-multiple: true" in workflow
+
+
 def test_macos_build_does_not_use_iconutil():
     build_script = _read("scripts/build_release.sh")
 
