@@ -381,7 +381,6 @@ CITY_DISTRICT_DISPLAY: dict[str, dict[str, int]] = {
         "Słoneczny Stok": 63,
         "Wygoda": 21,
         "Wysoki Stoczek": 57,
-        "Zawady": 45,
         "Zielone Wzgórza": 51,
     },
     "czestochowa": {

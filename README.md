@@ -146,7 +146,7 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 | Łódź | `lodz` | 5 |
 | Katowice | `katowice` | 21 |
 | Szczecin | `szczecin` | 15 |
-| Białystok | `bialystok` | 28 |
+| Białystok | `bialystok` | 27 |
 | Częstochowa | `czestochowa` | 18 |
 
 ### Przykłady district_id (Warszawa)
