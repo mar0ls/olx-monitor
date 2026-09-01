@@ -34,6 +34,16 @@ _IMPERSONATE_PROFILES = ["chrome", "safari", "firefox"]
 # Zmienia język treści na polskiej stronie, nie odcisk klienta.
 _EXTRA_HEADERS = {"Accept-Language": "pl-PL,pl;q=0.9,en;q=0.7"}
 
+# Używane tylko w fallbacku na requests — profil impersonate ma własne, nowsze.
+_FALLBACK_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/123.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
 # Te nagłówki ustawia profil impersonate, spójnie z odciskiem TLS. Wersje od
 # wywołującego bywają starsze (np. bez br/zstd) i rozjeżdżają odcisk z UA.
 _FINGERPRINT_HEADERS = {
@@ -76,7 +86,7 @@ def get(url: str, headers: dict | None = None, timeout: int = 15):
     """
     if not HAS_CURL_CFFI:
         # Bez podszywania się ręczne nagłówki pomagają, więc je zostawiamy.
-        merged = dict(_EXTRA_HEADERS)
+        merged = {**_FALLBACK_HEADERS, **_EXTRA_HEADERS}
         if headers:
             merged.update(headers)
         return requests.get(url, headers=merged, timeout=timeout)
