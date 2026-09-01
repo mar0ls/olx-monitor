@@ -26,6 +26,8 @@ from typing import Any, TypedDict
 import requests
 from bs4 import BeautifulSoup
 
+import http_client
+
 logger = logging.getLogger(__name__)
 
 # Stałe
@@ -470,11 +472,11 @@ def build_url(config: dict, page: int = 1) -> str:
 
 def fetch_page(url: str) -> BeautifulSoup | None:
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except requests.HTTPError as e:
-        logger.error("Błąd HTTP %s dla %s", e.response.status_code if e.response else "?", url)
+        logger.error("Błąd HTTP %s dla %s", e.response.status_code if e.response is not None else "?", url)
         return None
     except requests.RequestException as e:
         logger.error("Nie można pobrać strony %s: %s", url, e)
@@ -612,7 +614,7 @@ def fetch_detail(url: str) -> tuple[str, int]:
         oraz kwotę z pola "Czynsz (dodatkowo)" z sidebara OLX (0 jeśli brak).
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = http_client.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 

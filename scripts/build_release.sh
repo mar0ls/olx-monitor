@@ -104,6 +104,11 @@ case "$OS_NAME" in
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \
+      --hidden-import http_client \
+      --hidden-import curl_cffi \
+      --hidden-import curl_cffi.requests \
+      --hidden-import curl_cffi._wrapper \
+      --hidden-import _cffi_backend \
       --distpath "$TMP_DIST" \
       --workpath "$TMP_BUILD" \
       --specpath "$TMP_SPEC" \
@@ -125,6 +130,11 @@ case "$OS_NAME" in
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \
+      --hidden-import http_client \
+      --hidden-import curl_cffi \
+      --hidden-import curl_cffi.requests \
+      --hidden-import curl_cffi._wrapper \
+      --hidden-import _cffi_backend \
       --distpath "$TMP_DIST" \
       --workpath "$TMP_BUILD" \
       --specpath "$TMP_SPEC" \
@@ -144,6 +154,11 @@ case "$OS_NAME" in
       --add-data "$CHECKMARK_DATA" \
       --add-data "$ICON_PNG_DATA" \
       --hidden-import otodom_scraper \
+      --hidden-import http_client \
+      --hidden-import curl_cffi \
+      --hidden-import curl_cffi.requests \
+      --hidden-import curl_cffi._wrapper \
+      --hidden-import _cffi_backend \
       --distpath "$TMP_DIST" \
       --workpath "$TMP_BUILD" \
       --specpath "$TMP_SPEC" \

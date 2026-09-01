@@ -93,7 +93,7 @@ def fetch_otodom_detail(url: str) -> tuple[str, int]:
 
     except requests.HTTPError as e:
         logger.error("Błąd HTTP %s dla %s",
-                     e.response.status_code if e.response else "?", url)
+                     e.response.status_code if e.response is not None else "?", url)
         return "", 0
     except requests.RequestException as e:
         logger.warning("Nie można pobrać ogłoszenia otodom %s: %s", url, e)
