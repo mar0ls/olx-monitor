@@ -173,7 +173,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Przestaw dev na main
         if: ${{ steps.pr.outputs.skip != 'true' }}
