@@ -78,3 +78,7 @@ jobs:
           # PAT_TOKEN wymagany — GITHUB_TOKEN nie wyzwala innych workflow
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      - name: Przestaw dev na main
+        if: env.CHANGED == 'true'
+        run: bash scripts/sync_dev_with_main.sh

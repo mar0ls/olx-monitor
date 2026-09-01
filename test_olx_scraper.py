@@ -1263,7 +1263,7 @@ class TestHttpClient:
         """Ręczne nagłówki rozjeżdżają się z odciskiem TLS profilu impersonate."""
         captured = {}
 
-        def fake_get(url, headers=None, timeout=None, impersonate=None):
+        def fake_get(_url, headers=None, **_):
             captured.update(headers or {})
             return MagicMock(status_code=200)
 

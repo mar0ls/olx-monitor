@@ -167,3 +167,14 @@ jobs:
                 `Merge PR #${pull_number} nie został wykonany w tym kroku (to może być OK, np. oczekiwanie na checki): ${error.message}`,
               );
             }
+
+      - name: Checkout (do syncu dev)
+        if: ${{ steps.pr.outputs.skip != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Przestaw dev na main
+        if: ${{ steps.pr.outputs.skip != 'true' }}
+        run: bash scripts/sync_dev_with_main.sh
