@@ -130,7 +130,7 @@ Pod filtrami widoczne jest krótkie podsumowanie aktywnego widoku: liczba ogłos
 
 ## Obsługiwane miasta i dzielnice
 
-Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (1 października 2026).
+Scraper zawiera wbudowaną mapę `district_id` dla 12 polskich miast (1 listopada 2026).
 W GUI dzielnica wybierana jest z listy rozwijanej wypełnianej automatycznie po wpisaniu miasta.
 Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toruń, Kielce, Opole, Olsztyn, Zielona Góra) scraper przeszukuje całe miasto.
 
@@ -140,14 +140,14 @@ Dla miast bez filtrów dzielnic na OLX (Bydgoszcz, Lublin, Radom, Rzeszów, Toru
 | Kraków | `krakow` | 18 |
 | Wrocław | `wroclaw` | 6 |
 | Poznań | `poznan` | 28 |
-| Gdańsk | `gdansk` | 30 |
+| Gdańsk | `gdansk` | 32 |
 | Gdynia | `gdynia` | 22 |
 | Sopot | `sopot` | 3 |
 | Łódź | `lodz` | 5 |
 | Katowice | `katowice` | 21 |
-| Szczecin | `szczecin` | 16 |
-| Białystok | `bialystok` | 26 |
-| Częstochowa | `czestochowa` | 18 |
+| Szczecin | `szczecin` | 17 |
+| Białystok | `bialystok` | 28 |
+| Częstochowa | `czestochowa` | 20 |
 
 ### Przykłady district_id (Warszawa)
 
